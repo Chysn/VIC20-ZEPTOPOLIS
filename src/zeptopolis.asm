@@ -28,32 +28,50 @@ Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$31
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Game Configuration
 FX_VOICE    = $900c             ; Sound effects voice
-IN_YEAR     = 2021              ; Starting year
-IN_TREASURY = 100               ; Starting treasury
+IN_YEAR     = 2050              ; Starting year
+IN_TREASURY = 500               ; Starting treasury
 MENU_ITEMS  = 10                ; Number of actions in menu
+ROAD_COST   = 1
 
 ; Character Constants
 CHR_CURSOR  = $3f               ; Cursor
 CHR_CANCEL  = $22               ; Action Cancel
-CHR_BUS     = $2c               ; Business
 CHR_ROAD    = $23               ; Road Placeholder
+CHR_UHOUSE  = $24               ; Unoccupied House
+CHR_UBUS    = $25               ; Unoccupied Business
+CHR_WIND    = $26               ; Wind Farm
+CHR_SCHOOL  = $27               ; School
+CHR_FIRE    = $28               ; Firehouse
+CHR_CLINIC  = $29               ; Clinic
+CHR_PARK    = $2a               ; Park               
+CHR_HOUSE   = $2c               ; House
+CHR_BUS     = $2d               ; Business
+CHR_LAKE    = $2e               ; Lake (obstacle)
 CHR_BURN    = $2f               ; Burned down
 
 ; Color Constants
 COL_CURSOR  = 6                 ; Cursor, blue
 COL_ROAD    = 0                 ; Road, black
-COL_UNOCC   = 6                 ; Unoccupied properties, green
-COL_OCC     = 6                 ; Occupied properties, blue
-COL_SCHOOL  = 4                 ; School, purple
-COL_WIND    = 4                 ; Wind Farm, purple
+COL_UNOCC   = 4                 ; Unoccupied properties, purple
+COL_OCC     = 3                 ; Occupied properties, cyan
+COL_SCHOOL  = 7                 ; School, yellow
+COL_WIND    = 1                 ; Wind Farm, white
 COL_FIRE    = 2                 ; Firehouse, red
 COL_CLINIC  = 2                 ; Clinic, red
 COL_PARK    = 5                 ; Park, green
-COL_FOREST  = 5                 ; Forest, green
+COL_LAKE    = 6                 ; Lake, blue
 COL_BURN    = 2                 ; Burned Down, red
 
-; Index Constants
+; Index and Bit Value Constants
 IDX_ROAD    = 1
+BIT_WIND    = %00000001
+BIT_SCHOOL  = %00000010
+BIT_FIRE    = %00000100
+BIT_CLINIC  = %00001000
+BIT_PARK    = %00010000
+BIT_HOUSE   = %00100000
+BIT_BUS     = %01000000
+BIT_BURN    = %10000000
 
 ; Constants
 NORTH       = 0
@@ -63,19 +81,33 @@ WEST        = 3
 FIRE        = 4
 
 ; Game Memory
+TMP         = $01               ; Subroutine temporary storage
 UNDER       = $07               ; Character under pointer
 PREV_X      = $08               ; Previous x coordinate
 PREV_Y      = $09               ; Previous y coordinate
 BUILD_IX    = $0a               ; Build index
 ITERATOR    = $0b               ; Local iterator
 HAPPY       = $0c               ; Satisfaction (10% - 99%)
+BUILD_MASK  = $a0               ; Build mask (for wind farms)
 ACTION_FL   = $a1               ; Action flag
+NEARBY_ST   = $a2               ; Nearby structures bitfield
+PATTERN     = $a3               ; Current road search pattern
+STEP_COUNT  = $a4               ; Step count for pattern search
+STEPS       = $a5               ; Part of pattern with remaining steps
+CURR_DIR    = $a6               ; Current search direction
+LAST_DIR    = $a7               ; Last search direction
+RNDNUM      = $a8               ; Random number tmp
+SOLD_HOUSES = $a9               ; Number of houses sold this turn
+SOLD_BUSES  = $aa               ; Number of businesses sold this turn
+VALUE       = $ab               ; Current property value
+ADJ_ST      = $ac               ; Adjacent structures bitfield
+HOUSE_COUNT = $ad               ; House Count
+BUS_COUNT   = $ae               ; Business Count
 COL_PTR     = $f3               ; Screen color pointer (2 bytes)
 COOR_X      = $f9               ; x coordinate
 COOR_Y      = $fa               ; y coordinate
 PTR         = $fb               ; Pointer (2 bytes)
-P_RAND      = $fd               ; Pseudorandom seed (non-zero)
-TMP         = $fe               ; Subroutine temporary storage
+P_RAND      = $fd               ; Pseudorandom seed (2 bytes)
 TIME        = $ff               ; Jiffy counter
 
 ; Game State
@@ -88,7 +120,7 @@ CINV        = $0314             ; ISR vector
 ;NMINV       = $0318             ; Release NMI vector
 -NMINV     = $fffe             ; Development NMI non-vector (uncomment for dev)
 SCREEN      = $1e00             ; Screen character memory (unexpanded)
-BOARD       = SCREEN+44         ; Starting address of board
+BOARD       = SCREEN+66         ; Starting address of board
 COLOR       = $9600             ; Screen color memory (unexpanded)
 IRQ         = $eb15             ; System ISR return point
 VICCR5      = $9005             ; Character map register
@@ -145,12 +177,24 @@ new_pos:    jsr DrawCursor      ; Draw the new cursor
             jmp Main            ; Return to Main
       
 ; Enter Action Mode
-;             
+; Here player may
+;   - Build
+;   - Cancel
+;   - Finish turn            
 Action:     jsr Joystick        ; Debounce the fire button before entering
             cpx #FIRE           ; ,,
             beq Action          ; ,,
             sec                 ; Set Action flag
             ror ACTION_FL       ; ,,
+            lda UNDER           ; Get character at cursor
+            cmp #CHR_LAKE       ; If it's a lake, allow no action here
+            bne ch_space        ; ,,
+            lsr ACTION_FL       ; Clear action flag
+            jmp Main            ; Back to Main
+ch_space:   cmp #$20            ; If there's already something else there,
+            beq show            ;   start the build index on that item, to
+            lda #0              ;   make it harder to accidentally remove
+            sta BUILD_IX        ;   intentional development.
 show:       ldx #0              ; Show the item being selected
             lda BUILD_IX        ; ,,
             clc                 ; ,,
@@ -178,7 +222,6 @@ ch_next:    cpx #EAST           ; If moving right, increment the menu
 action_d:   jsr Joystick        ; Debounce joystick for action select
             bpl action_d        ; ,,
             jmp show            ; Go back to show item
-action_r:   jmp Main
 
 ; Build Item
 ; In BUILD_IX
@@ -191,9 +234,14 @@ Build:      jsr Joystick        ; Debounce the fire button for build
             cmp #MENU_ITEMS-1   ; Has the turn been ended?
             bne item            ; ,,
             jmp NextTurn        ; ,,
-item:       cmp #IDX_ROAD
-            bne reg_item
-            lda #%11011110
+item:       lda #1              ; Each build takes 1 coin
+            jsr Spend           ; ,,
+            bcs cancel          ; ,,
+            jsr DrawStats       ; Update Treasury amount
+            lda BUILD_IX
+            cmp #IDX_ROAD       ; If the player is building a road,
+            bne reg_item        ;   ,,
+            lda #%11011110      ;   character offset for placeholder.
 reg_item:   clc                 ; Show the item at the cursor
             adc #CHR_CANCEL     ; ,,
             sta UNDER           ; ,,
@@ -205,7 +253,11 @@ reg_item:   clc                 ; Show the item at the cursor
             jmp Main            ;   cursor until moved.
 cancel:     lda UNDER
             jsr Place
-            jmp Main
+            lda UNDER
+            cmp #$20
+            bne to_main
+            jsr DrawCursor
+to_main:    jmp Main
             
 ; Interrupt Service Routine 
 ; Replaces the BASIC ISR and performs these functions
@@ -215,14 +267,29 @@ cancel:     lda UNDER
 ISR:        inc TIME            ; Circumventing BASIC's clock, so advance it
             ;jsr FXService       ; Play any sound effects that are going on
             bit ACTION_FL       ; Flash cursor if in Action mode
-            bpl isr_r
-            ldy #6
-            lda #%00010000
-            and TIME
-            bne flash_cur
-            iny
-flash_cur:  tya
-            jsr SetColor
+            bpl move_wind       ; If not in Action mode, move wind turbines
+            ldy #6              ; Default to blue
+            lda #%00010000      ; Every 16 interrupts, flash the cursor
+            and TIME            ; ,,
+            bne flash_cur       ; ,,
+            iny                 ; ,,
+flash_cur:  tya                 ; ,,
+            jsr SetColor        ; ,,
+            jmp isr_r
+move_wind:  ldx #0
+            lda #%00011111      
+            bit TIME
+            bne isr_r
+            bvc rotate
+            ldx #5
+rotate:     ldy #4
+-loop:      lda WFAnim1,x
+            sta WindFarm,y
+            lda BurnAnim1,x
+            sta Burning,y
+            inx
+            dey
+            bpl loop
 isr_r:      jmp IRQ             ; Return from interrupt
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -240,6 +307,35 @@ OnlyCursor: lda #CHR_CURSOR     ; Place the cursor
             jsr SetColor        ; ,,
             rts
 
+; Spend Treasury
+; In A
+; If there's no enough left, do not subtract, and set Carry            
+Spend:      ldy TREASURY+1      ; If high byte of Treasury is non-zero, then of
+            bne subtract        ;   course the item is affordable
+            cmp TREASURY        ; If the amount in the Treasury is less than
+            beq subtract        ;   required amount
+            bcs spend_rs        ;   fail with carry set
+subtract:   sta TMP
+            lda TREASURY
+            sec
+            sbc TMP
+            sta TREASURY
+            bcs spend_r
+            dec TREASURY+1
+spend_r:    clc
+spend_rs:   rts 
+            
+; Revenue to Treasure
+; In VALUE
+Revenue:    lda VALUE           ; Get revenue from the current VALUE
+            bmi revenue_r       ; If it's negative, never mind
+            clc                 ; Add value to Treasury
+            adc TREASURY        ; ,,
+            sta TREASURY        ; ,,
+            bcc revenue_r       ; ,,
+            inc TREASURY+1      ; ,,
+revenue_r:  rts                       
+                        
 ; Draw Stats 
 ; Population   = Column 23
 ; Treasury     = Column 7
@@ -321,7 +417,7 @@ Roads:      lda COOR_X          ; Save cursor coordinates
             jsr SetColor        ; ,,
 next_cell:  inc COOR_Y          ; Continue iterating across all characters in   
             lda COOR_Y          ;   the maze
-            cmp #21             ;   ,,
+            cmp #20             ;   ,,
             bne loop            ;   ,,
             lda #$00            ;   ,,
             sta COOR_Y          ;   ,,
@@ -360,20 +456,77 @@ restore:    pla
             rts
 is_road:    sec
             rts  
-            
+
+; Follow Road
+; Follow all combinations of between 1 and 4 roads, starting from
+; the current coordinate. Return adjacent buildings in A.
+; See AdjValues table for the meaning of the bits in the bitfield.
+; 
+FollowRoad: lda #0              ; Initialize pattern
+            sta PATTERN         ; ,,
+            sta NEARBY_ST       ; Initialize adjacent structures
+            lda COOR_X          ; Set starting point in PREV_X and _Y
+            sta PREV_X          ; ,,
+            lda COOR_Y          ; ,,
+            sta PREV_Y          ; ,,
+next_patt:  jsr restore_c       ; Restore original coordinates
+            lda #%11111111      ; Reset build mask to all buildings
+            sta BUILD_MASK      ; ,,
+            lda #4              ; Reset step counter to 4
+            sta STEP_COUNT      ; ,,
+            lda PATTERN         ; Set steps to the current pattern
+            sta STEPS           ; ,,
+next_step:  lda STEPS           ; Load the current step pattern
+            and #%00000011      ; Mask next direction bits (0-3)
+            sta CURR_DIR        ; Save current direction
+            lda STEP_COUNT      ; If this is the first step in the pattern,
+            cmp #4              ;   do not check the prior direction yet
+            beq skip_ch         ;   ,,
+            lda CURR_DIR        ; EOR current direction with prior direction
+            eor LAST_DIR        ;   ,,
+            cmp #$02            ; If $02, then pattern is backtracking
+            beq patt_done       ;   indicating that it's done
+skip_ch:    lda CURR_DIR        ; Current direction for the move
+            sta LAST_DIR        ; Set last direction to current
+            jsr MoveCoor        ; Move the coordinate based on direction
+            jsr Coor2Ptr        ; Convert coordinate to screen location pointer
+            ldx #0              ; Is this step on a road?
+            lda (PTR,x)         ; ,,
+            cmp #$10            ; ,,
+            bcc sh_step         ; If not, allow only Wind Farms to be added for
+            lda #BIT_WIND       ;   this pattern, as Wind Farms may be in range
+            sta BUILD_MASK      ;   without being connected by road.
+sh_step:    lsr STEPS           ; Shift to the next step, two bits right
+            lsr STEPS           ; ,,
+            dec STEP_COUNT      ; Decrement step count
+            bne next_step       ; Do next step if not done with pattern
+patt_done:  jsr Adjacents       ; Get buildings adjacent to the final step
+            and BUILD_MASK      ; Mask allowable buildings for this pattern
+            ora NEARBY_ST       ; Add this step's bitfield to cumulative byte
+            sta NEARBY_ST       ; ,,
+            inc PATTERN         ; Move to the next pattern
+            bne next_patt       ; Until all patterns have been done
+restore_c:  ldy PREV_X          ; Restore original coordinates
+            sty COOR_X          ; ,,
+            ldy PREV_Y          ; ,,
+            sty COOR_Y          ; ,,
+            jsr Coor2Ptr
+            lda NEARBY_ST       ; Put cumulative bitfield in A
+            rts
+                      
 ; Get Adjacent Buildings            
-; A is a bitfield of adjacent buildings
+; A is a bitfield of cardinally-adjacent buildings
 ; See AdjValues for values
 Adjacents:  lda #0
-            sta TMP
+            sta ADJ_ST
             lda PTR             ; Back the pointer up to the upper left
             sec                 ;   corner of the surrounding space
-            sbc #23             ;   ,,
+            sbc #22             ;   ,,
             sta PTR             ;   ,,
             bcs search          ;   ,,
             dec PTR+1           ;   ,,
-search:     ldy #7              ; The AdjPatt table adds numbers of cells
--loop:      lda AdjPatt,y       ;   to PTR surrounding the pointer
+search:     ldy #3              ; The AdjPatt table adds numbers of cells
+-loop:      lda CarPatt,y       ;   to PTR surrounding the pointer
             clc                 ;   ,,
             adc PTR             ;   ,,
             sta PTR             ;   ,,
@@ -382,16 +535,17 @@ search:     ldy #7              ; The AdjPatt table adds numbers of cells
 lookup_val: ldx #0              ; Get character at pointer position
             lda (PTR,x)         ; ,,
             cmp #CHR_ROAD       ; Range-check character at location
-            bcc next_patt       ; ,,
+            bcc next_adj        ; ,,
             cmp #CHR_BURN+1     ; ,,
-            bcs next_patt       ; ,,
+            bcs next_adj        ; ,,
             tax                 ; Look up the value in the table
             lda AdjValues-$23,x ; ,,
-            ora TMP             ; Add the value to the adjacent list
-            sta TMP             ; ,,
-next_patt:  dey                 ; Iterate through entire pattern
+            ora ADJ_ST          ; Add the value to the adjacent bitfield
+            sta ADJ_ST          ; ,,
+next_adj:   dey                 ; Iterate through entire pattern
             bpl loop            ; ,,
-            lda TMP             ; Put adjacents bitfield into A
+            jsr Coor2Ptr        ; Restore pointer
+            lda ADJ_ST          ; Put adjacents bitfield into A
             rts
        
 ; Advance to Next Turn            
@@ -400,12 +554,242 @@ NextTurn:   lda UNDER           ; Replace previous character
             inc TURN_NUM        ; Increment turn number (year)
             lda #0              ; Reset build index
             sta BUILD_IX        ; ,,
+            inc $900f
+            jsr Upkeep      
+            dec $900f
             jsr DrawStats
-            ldx #0
-            lda (PTR,x)
-            sta UNDER
-            jmp Main      
+            jsr DrawCursor
+            jmp Main  
+            
+Test:       jsr FollowRoad
+            ldy #0
+-loop:      ldx #$30
+            asl
+            pha
+            bcc write
+            inx
+write:      txa
+            sta $1e00,y
+            pla
+            iny
+            cpy #8
+            bne loop
+            jsr Coor2Ptr
+            rts            
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; UPKEEP ROUTINES
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Upkeep
+; Iterate through all map cells
+;   - For Houses, calculate tax base and add to Treasury
+;   - For unprotected Houses, there's a chance of fire
+;   - For Businesses, calculate tax base and add to Treasury
+;   - For unprotected Businesses, there's a chance of fire
+;   - For Wind Farms, Firehouses, Clinics, and Schools,
+;     subtract maintenance from Treasury
+;   - If maintenance cannot be paid, there's a chance of fire
+;   - For unoccupied Houses and Businesses, calculate chance of
+;     conversion of occupied
+Upkeep:     lda #0              ; Reset sold house and business counters
+            sta SOLD_HOUSES     ;   which are used to limit new
+            sta SOLD_BUSES      ;   occupancy
+            sta HOUSE_COUNT     ; Reset House count
+            sta BUS_COUNT       ; Reset Business count
+            sta POP             ; Reset population for recalculation
+            sta POP+1           ; ,,
+            lda COOR_X          ; Save cursor coordinates
+            pha                 ; ,,
+            lda COOR_Y          ; ,,
+            pha                 ; ,,
+            lda #$00            ; Start at the top left corner of the board
+            sta COOR_X          ; ,,
+            sta COOR_Y          ; ,,
+-loop:      jsr Coor2Ptr        ; Get the character at the pointer
+            ldx #$00            ; ,,
+            lda (PTR,x)         ; ,,          
+            cmp #CHR_UHOUSE     ; Handle UNOCCUPIED HOUSE
+            bne ch_ubus         ; ,,
+            jsr SellHouse
+            jmp next_map
+ch_ubus:    cmp #CHR_UBUS       ; Handle UNOCCUPIED_BUSINESS
+            bne ch_house
+            jsr SellBus
+            jmp next_map
+ch_house:   cmp #CHR_HOUSE      ; Handle HOUSE
+            bne ch_bus          ; ,,
+            jsr CompHouse       ; Compute House
+            jmp next_map
+ch_bus:     cmp #CHR_BUS        ; Handle BUSINESS
+            bne ch_maint
+            jsr CompBus
+            jmp next_map
+ch_maint:   cmp #CHR_WIND       ; Pay maintenance for maintainable
+            bcc next_map        ;   structures (Wind Farm, School,
+            cmp #CHR_PARK+1     ;   Firehouse, Clinic, Park).
+            bcs next_map        ;   ,,
+            jsr Maint           ;   ,,
+next_map:   inc COOR_Y
+            lda COOR_Y
+            cmp #20
+            bne loop
+            lda #0
+            sta COOR_Y
+            inc COOR_X
+            ldy COOR_X
+            lda #$21            ; Progress bar
+            sta SCREEN+43,y     ; ,,
+            cpy #22             ; ,,
+            bne loop            ; ,,
+            pla                 ; Restore the coordinates to pre-upkeep
+            sta COOR_Y          ;   location
+            pla                 ;   ,,
+            sta COOR_X          ;   ,,
+            ldy #22
+            lda #$20
+-loop:      sta SCREEN+44,y     ; Clear progress bar
+            dey
+            bpl loop
+            rts
+
+; Maintenance
+Maint:      sec                 ; Convert character to index
+            sbc #CHR_WIND       ; ,,
+            tay                 ; ,,
+            lda MaintCosts,y    ; Get maintenance cost of structure
+            jsr Spend           ; Take cost from Treasury
+            bcc maint_r         ; If there's not enough, there's a 1 in 8
+            jsr Rand7           ;   chance that the stucture will burn
+            bne maint_r         ;   down
+            lda #CHR_BURN       ;   ,,
+            jsr Place           ;   ,,
+maint_r:    rts            
+            
+
+; Sell House
+; For an unoccupied house at the coordinate, see if it qualifies for
+; occupancy
+; Rule - If the unoccupied house has active power, it can sell.
+SellHouse:  lda SOLD_HOUSES     ; If a house was sold this turn, return
+            bne sellh_r         ; ,,
+            jsr FollowRoad      ; A house must have active power
+            and #BIT_WIND       ; ,,
+            beq sellh_r         ; ,,
+            lda #CHR_HOUSE      ; Place the house
+            jsr Place           ; ,,
+            inc SOLD_HOUSES     ; Increment sell count
+            bcc sellh_r
+sellh_r:    rts
+
+; Sell Business
+; For an unoccupied business at the coordinate, see if it qualifies for
+; occupancy
+; Rules - If the unoccupied business is adjacent to an occupied business,
+;         it can sell.
+;       - If the unoccupied business has active power and a nearby house
+;         (connected by roads) it can sell.
+SellBus:    lda SOLD_BUSES      ; If a business was sold this turn, return
+            bne sellb_r         ; ,,
+            jsr FollowRoad      ; A business must have active power to sell
+            tax                 ; ,,
+            and #BIT_WIND       ; ,,
+            beq sellb_r         ; ,,
+            txa                 ; If it clears the power hurdle, it can sell
+            and #BIT_HOUSE      ;   by either (1) being near a house, connected
+            bne sold_bus        ;   by roads, or
+            jsr Adjacents       ;   (2) being adjacent to another occupied
+            and #BIT_BUS        ;   business
+            beq sellb_r         ; Otherwise, it does not sell yet
+sold_bus:   lda #CHR_BUS        ; Place sold business
+            jsr Place           ; ,,
+            inc SOLD_BUSES      ; Increment sell count
+sellb_r:    rts
+
+; Compute House
+CompHouse:  lda #0              ; Initialize property value
+            sta VALUE           ; ,,
+            jsr FollowRoad      ; Get nearby structures
+            lda #BIT_WIND       ; Is there a Wind Farm nearby?
+            bit NEARBY_ST       ; ,,
+            bne ch_hfire        ; If so, go to next check
+            lda #CHR_UHOUSE     ; Otherwise, they move out
+            jmp Place           ; ,,
+ch_hfire:   lda #BIT_FIRE       ; Is there a Firehouse nearby?
+            bit NEARBY_ST       ; ,,
+            bne ch_hschool      ; If so, house is safe from fire
+            jsr Rand15          ; 1 in 16 chance of fire
+            bne ch_hschool      ; ,,
+            lda #CHR_BURN       ; Burn the house down
+            jmp Place           ;
+ch_hschool: lda #BIT_SCHOOL     ; Is there a school nearby?
+            bit NEARBY_ST       ; ,,
+            beq ch_hclinic      ; ,,
+            inc VALUE           ; Schools contribute 3 to value
+            inc VALUE           ; ,,
+            inc VALUE           ; ,,
+ch_hclinic: lda #BIT_CLINIC     ; Is there a clinic nearby?
+            bit NEARBY_ST       ; ,,
+            beq ch_hbus         ; ,,
+            inc VALUE           ; Clinics contribute 2 to value
+            inc VALUE           ; ,,
+            inc POP             ; Clinics add 1 to population
+            bne ch_hbus         ;   per house
+            inc POP+1           ;   ,,
+ch_hbus:    lda #BIT_BUS        ; Is there a business nearby?
+            bit NEARBY_ST       ; ,,
+            beq ch_hadj         ; ,,
+            inc VALUE           ; Business contributes 1 to value
+ch_hadj:    jsr Adjacents       ; Get cardinally-adjacent structures
+            lda #BIT_PARK       ; Is there a Park adjacent?
+            bit ADJ_ST          ; ,,
+            beq ch_hhouse       ; ,,
+            inc VALUE           ; Park contribues 1 to value
+ch_hhouse:  lda #BIT_HOUSE      ; Is there a House right next door?
+            bit ADJ_ST          ; ,,
+            beq hrevenue        ; ,,
+            dec VALUE           ; Adjacent House reduces value by 1
+hrevenue:   jsr Revenue         ; Add property value to Treasury
+            jsr Rand7           ; Add people to each house (0-7)
+            sec                 ; ,, (SEC for +1)
+            adc POP             ; ,,
+            sta POP             ; ,,
+            bcc comph_r         ; ,,
+            inc POP+1           ; ,,
+comph_r:    inc HOUSE_COUNT     ; Count Houses
+            rts
+
+; Compute Business            
+CompBus:    lda #0              ; Initialize property value
+            sta VALUE           ; ,,
+            jsr FollowRoad      ; Get nearby structures
+            lda #BIT_WIND       ; Is there a Wind Farm nearby?
+            bit NEARBY_ST       ; ,,
+            bne ch_bfire        ; If so, go to next check
+            lda #CHR_UBUS       ; Otherwise, they move out
+            jmp Place           ; ,,
+ch_bfire:   lda #BIT_FIRE       ; Is there a Firehouse nearby?
+            bit NEARBY_ST       ; ,,
+            bne bhas_fh         ; If so, business is safe from fire
+            jsr Rand15          ; 1 in 16 chance of fire
+            bne ch_bhouse       ; ,,
+            lda #CHR_BURN       ; Burn the business down
+            jmp Place           ; ,,
+bhas_fh:    inc VALUE           ; Firehouse contributes 2 to value
+            inc VALUE           ; ,,
+ch_bhouse:  lda #BIT_HOUSE      ; Is there a House nearby?
+            bit NEARBY_ST       ; ,,
+            beq ch_badj         ; ,,
+            inc VALUE           ; A House contributes 2 to value
+            inc VALUE           ; ,,
+ch_badj:    jsr Adjacents       ; Get cardinally-adjacent structures
+            lda #BIT_BUS        ; ,,
+            bit ADJ_ST          ; ,,
+            beq brevenue        ; ,,
+            inc VALUE           ; Neighboring Business contributes 1 to value
+brevenue:   jsr Revenue         ; Add property value to Treasury
+            inc BUS_COUNT       ; Count Businesses
+            rts           
+                  
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; SUBROUTINES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -417,6 +801,27 @@ Delay:      clc
 -loop:      cmp TIME
             bne loop
             rts 
+            
+; Pseudo Random
+Rand7:      lda #%00100000      ; 3-bit
+            .byte $3c
+Rand15:     lda #%00010000      ; 4-bit
+            .byte $3c
+Rand31:     lda #%00001000      ; 5-bit
+PRand:      sta RNDNUM
+-loop:      lsr P_RAND
+            ror P_RAND+1
+            bcc shift_rnd
+            lda P_RAND
+            eor #$aa
+            sta P_RAND
+            lda P_RAND+1
+            eor #$2b
+            sta P_RAND+1
+shift_rnd:  rol RNDNUM
+            bcc loop
+            lda RNDNUM
+            rts            
             
 ; Read the Joystick
 ; Return the direction in X
@@ -465,14 +870,14 @@ Coor2Ptr:   lda #<BOARD         ; Start at the upper left corner of the screen
             sta PTR+1           ; ,,
             lda COOR_Y          ; Get y coordinate
             beq no_y            ; If there's no offset, skip multiplication
-            tay                 ; Y is the row index
+            tax                 ; X is the row index
 -loop:      lda #22             ; Drop to the next line...
             clc                 ; ,,
             adc PTR             ; ,,
             sta PTR             ; ,,
             bcc next_y          ; ,,
             inc PTR+1           ; ,,
-next_y:     dey                 ; ...Y times
+next_y:     dex                 ; ...Y times
             bne loop            ; ,,
 no_y:       lda COOR_X          ; Get x coordinate
             clc                 ; ,,
@@ -491,7 +896,7 @@ CheckBound: lda COOR_X          ; Check X coordinate for <0
             bcs out             ; ,,
             lda COOR_Y          ; Check Y coordinate for <0
             bmi out             ; ,,
-            cmp #21             ; Check Y coordinate for >20
+            cmp #20             ; Check Y coordinate for >20
             bcs out             ; ,,
             rts                 ; Return with carry clear (in)
 out:        sec                 ; Return with carry set (out)
@@ -528,7 +933,7 @@ SetColor:   pha
 ; SETUP ROUTINES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Set up hardware
-Setup:      lda #254            ; Set background color
+Setup:      lda #142            ; Set background color
             sta SCRCOL          ; ,,
             lda #0              ; Turn off sound registers
             sta NOISE           ; ,, 
@@ -559,34 +964,40 @@ Setup:      lda #254            ; Set background color
             lda #>ISR           ; ,,
             sta CINV+1          ; ,,
             cli                 ; ,,
-            ; Temporary charset transfer - Remove this when the program
-            ; gets long enough to use padding instead
-            ldy #$00
--loop:      lda CharSet,y
-            sta $1c00,y  
-            lda CharSet+256,y
-            sta $1d00,y
-            iny
-            bne loop
             ; Fall through to InitGame
 
 ; Initialize Game            
 InitGame:   lda #<Header        ; Show Board Header
             ldy #>Header        ; ,,
             jsr PRTSTR          ; ,,
-            lda #11             ; Set initial coordinates
-            sta COOR_X          ; ,,
-            sta COOR_Y          ; ,,
             lda #0              ; Reset build index to Cancel
             sta BUILD_IX        ; ,,
             sta POP             ; Initialize population
             sta POP+1           ; ,,
             sta ACTION_FL       ; Clear Action flag
+            sta TIME            ; Initialize timer
             sta TURN_NUM        ; Initialize turn number
             lda #<IN_TREASURY   ; Set initial treasury amount
             sta TREASURY        ; ,,
             lda #>IN_TREASURY   ; ,,
             sta TREASURY+1      ; ,,
+            ldy #5
+-loop:      jsr Rand31
+            cmp #22
+            bcs loop
+            sta COOR_X
+rnd_y:      jsr Rand31
+            cmp #20
+            bcs rnd_y
+            sta COOR_Y
+            jsr Coor2Ptr
+            lda #CHR_LAKE
+            jsr Place 
+            dey
+            bne loop  
+            lda #10             ; Set initial coordinates
+            sta COOR_X          ; ,,
+            sta COOR_Y          ; ,,
             jsr DrawStats       ; Show stats in header
             jsr DrawCursor      ; Show cursor
             rts
@@ -602,14 +1013,16 @@ Header:     .asc $93,$1f,"PQRSTU!!!!VW!!XYZ[",$5c,"]",$5e,$5f
 JoyTable:   .byte $00,$04,$80,$08,$10,$20          ; Corresponding direction bit
 DirTable:   .byte $01,$02,$04,$08                  ; Index to bit value
 
-; Wind farm animation
-WFAnim1:    .byte $10,$10,$28,$44
-WFAnim2:    .byte $44,$28,$10,$10
+; Wind farm and burning animation
+WFAnim1:    .byte $10,$44,$38,$10,$10
+WFAnim2:    .byte $00,$10,$10,$38,$44
+BurnAnim1:  .byte $ee,$6e,$3c,$18,$10
+BurnAnim2:  .byte $dc,$f8,$70,$30,$10
 
 ; Colors of things
 Colors:     .byte COL_ROAD,COL_UNOCC,COL_UNOCC,COL_WIND
             .byte COL_SCHOOL,COL_FIRE,COL_CLINIC,COL_PARK
-            .byte 0,COL_OCC,COL_OCC,COL_FOREST,COL_BURN   
+            .byte 0,COL_OCC,COL_OCC,COL_LAKE,COL_BURN   
             
 ; Adjacent building values
 ; Wind Farm = Bit 0
@@ -617,14 +1030,19 @@ Colors:     .byte COL_ROAD,COL_UNOCC,COL_UNOCC,COL_WIND
 ; Firehouse = Bit 2
 ; Clinic    = Bit 3
 ; Park      = Bit 4
-; Forest    = Bit 4 (treated as Park)
+; Lake      = Bit 4 (same land value as Park)
 ; House     = Bit 5
 ; Business  = Bit 6
 ; Burned    = Bit 7
-AdjValues:  .byte 0,0,0,$01,$02,$04,$08,$10,0,$20,$40,$10,$80        
+AdjValues:  .byte 0,0,0,BIT_WIND,BIT_SCHOOL,BIT_FIRE,BIT_CLINIC,BIT_PARK
+            .byte 0,BIT_HOUSE,BIT_BUS,BIT_PARK,BIT_BURN        
 
-; Search pattern for adjacent search, starting from index 7 (PTR minus 23)
-AdjPatt:   .byte 1,1,20,2,20,1,1,0
+; Search pattern for adjacent search, starting from index 3 (PTR minus 22)
+CarPatt:   .byte 21,2,21,0
+
+; Yearly maintenance costs of maintainable structures
+;                 Wind Farm,School, Firehouse, Clinic, Park)
+MaintCosts: .byte 5,        15,     10,        10,     1
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; CUSTOM CHARACTER SET
@@ -639,7 +1057,12 @@ AdjPatt:   .byte 1,1,20,2,20,1,1,0
 ; character data.
 ;
 ; Roads $00 - $0f
-CharSet:    .byte $00,$00,$fe,$82,$d6,$82,$fe,$00  ; 0000 Parking Lot 
+; (The following lines generate padding for XA)
+pre_charset:
+* = $1c00
+.dsb (*-pre_charset)
+* = $1c00
+CharSet:    .byte $00,$aa,$aa,$aa,$00,$aa,$aa,$aa  ; 0000 Parking Lot 
             .byte $54,$54,$44,$54,$54,$44,$7c,$00  ; 0001 N			  
             .byte $00,$00,$7f,$40,$4c,$40,$7f,$00  ; 0010 E			        
             .byte $54,$54,$47,$40,$4c,$40,$3f,$00  ; 0011 N/E           
@@ -679,18 +1102,18 @@ CharSet:    .byte $00,$00,$fe,$82,$d6,$82,$fe,$00  ; 0000 Parking Lot
             .byte $ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff  ; $21 Reverse Space
             .byte $00,$44,$28,$10,$28,$44,$00,$00  ; $22 Cancel
             .byte $00,$00,$fe,$00,$6c,$00,$fe,$00  ; $23 Road Placeholder       
-            .byte $10,$38,$6c,$fe,$ce,$ca,$fa,$00  ; $24 Unocc. House
+            .byte $10,$38,$6c,$fe,$5c,$74,$74,$00  ; $24 Unocc. House
             .byte $00,$00,$ff,$d5,$ff,$d5,$df,$00  ; $25 Unocc. Business
-WindFarm:   .byte $10,$10,$28,$44,$00,$10,$10,$00  ; $26 Wind Farm
+WindFarm:   .byte $10,$10,$38,$44,$10,$10,$10,$00  ; $26 Wind Farm
             .byte $18,$10,$7c,$ee,$fe,$aa,$aa,$00  ; $27 School
             .byte $0e,$0a,$fe,$fe,$8a,$ae,$ae,$00  ; $28 Firehouse
             .byte $18,$92,$fe,$ee,$c6,$ee,$fe,$00  ; $29 Clinic
             .byte $00,$40,$e0,$e0,$e0,$4e,$4a,$00  ; $2a Park
             .byte $00,$88,$cc,$ee,$cc,$88,$00,$00  ; $2b End Turn
-            .byte $10,$38,$6c,$fe,$ce,$ca,$fa,$00  ; $2c House
+            .byte $10,$38,$6c,$fe,$5c,$74,$74,$00  ; $2c House
             .byte $00,$00,$ff,$d5,$ff,$d5,$df,$00  ; $2d Business
-            .byte $10,$38,$7c,$10,$7c,$fe,$10,$00  ; $2e Forest
-            .byte $08,$18,$24,$44,$52,$5a,$5a,$3c  ; $2f Burned Down
+            .byte $38,$6c,$d6,$fe,$dc,$ac,$78,$00  ; $2e Lake
+Burning:    .byte $10,$18,$3c,$6e,$ee,$cc,$78,$00  ; $2f Burned Down
                         
 ; Numerals $30 - $39
             .byte $ff,$ff,$83,$bb,$bb,$bb,$83,$ff  ; 0

@@ -5,3 +5,5 @@ cp ./vic/zeptopolis.prg ~/vic20/zep
 rm vic/zeptopolis.d64
 c1541 -format zeptopolis,8 d64 vic/zeptopolis.d64 -write vic/zeptopolis.prg
 
+cat toc | grep pre_charset
+
