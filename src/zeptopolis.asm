@@ -602,6 +602,8 @@ reset_ix:   lda #0              ; Reset build index
 ; Nearby the current coordinate            
 Structures: sei                 ; Stop interrupts to prevent cursor flash
             jsr FollowRoad      ;   during the FollowRoad routine
+            and #$ff - BIT_PARK ; (Parks are counted by adjacency only)
+            sta NEARBY_ST       ; ,,
             jsr Adjacents       ; Add adjacent structures to road-connected
             and #BIT_PARK + BIT_BUS
             ora NEARBY_ST       ;   structures
@@ -633,7 +635,8 @@ skip_pos:   iny
 ;   - If maintenance cannot be paid, there's a chance of fire
 ;   - For unoccupied Houses and Businesses, calculate chance of
 ;     conversion of occupied
-Upkeep:     lda #0              ; Reset sold house and business counters
+Upkeep:     jsr ClrStatus       ; Clear status bar
+            lda #0              ; Reset sold house and business counters
             sta SOLD_HOUSES     ;   which are used to limit new
             sta SOLD_BUSES      ;   occupancy
             sta HOUSE_COUNT     ; Reset House count
@@ -679,7 +682,7 @@ next_map:   inc COOR_Y
             sta COOR_Y
             inc COOR_X
             ldy COOR_X
-            lda #$21            ; Progress bar
+            lda #$c3            ; Progress bar
             sta SCREEN+43,y     ; ,,
             cpy #22             ; ,,
             bne loop            ; ,,
@@ -687,9 +690,9 @@ next_map:   inc COOR_Y
             sta COOR_Y          ;   location
             pla                 ;   ,,
             sta COOR_X          ;   ,,
-            ldy #21
+ClrStatus:  ldy #21
             lda #$20
--loop:      sta SCREEN+44,y     ; Clear progress bar
+-loop:      sta SCREEN+44,y     ; Clear status bar
             dey
             bpl loop
             rts
@@ -1058,12 +1061,12 @@ rnd_y:      jsr Rand31          ;   ,,
 ; DATA TABLES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Game Board Header
-Header:     .asc $93,$1f,"PQRSTU!!!!VW!!XYZ[",$5c,"]",$5e,$5f
+Header:     .asc $93,$1f,"PQRSTU!!!!!!!!VWXYZ[",$5c,"]"
             .asc ":!!!!!;!!!!!<!!>!=!!!!",$00
 
-; Budget Headers
-BudgetR     .asc $13,$11,$11,"     ",$12,"+",$92,";",$00
-BudgetE     .asc $20,$12,"-",$92,";",$00
+; Budget Header
+BudgetR     .asc $13,$11,$11,";",$21,$5f,$00
+BudgetE     .asc $21,$21,$5e,$00
 
 ; Direction tables
 JoyTable:   .byte $00,$04,$80,$08,$10,$20          ; Corresponding direction bit
@@ -1146,8 +1149,6 @@ CharSet:    .byte $00,$aa,$aa,$aa,$00,$aa,$aa,$aa  ; 0000 Parking Lot
             .byte $1c,$6b,$1b,$7b,$7c,$ff,$ff,$ff  ; PO
             .byte $dd,$5d,$5d,$5d,$c5,$ff,$ff,$ff  ; LI
             .byte $8f,$7f,$9f,$ef,$1f,$ff,$ff,$ff  ; S
-            .byte $08,$e9,$09,$39,$08,$ff,$ff,$ff  ; 20
-            .byte $42,$7a,$42,$4e,$42,$ff,$ff,$ff  ; 21
             .byte $f8,$fd,$fd,$fd,$f3,$ff,$ff,$ff  ; J
             .byte $ce,$b5,$86,$b7,$b4,$ff,$ff,$ff  ; AS
             .byte $33,$ed,$6d,$ad,$73,$ff,$ff,$ff  ; SO
@@ -1156,7 +1157,9 @@ CharSet:    .byte $00,$aa,$aa,$aa,$00,$aa,$aa,$aa  ; 0000 Parking Lot
             .byte $d8,$d7,$d9,$de,$31,$ff,$ff,$ff  ; US
             .byte $8b,$da,$da,$da,$da,$ff,$ff,$ff  ; TIA
             .byte $36,$d2,$14,$d6,$d6,$ff,$ff,$ff  ; AN
-            
+            .byte $ff,$ff,$ff,$ff,$c7,$ff,$ff,$ff  ; $1e Minus
+            .byte $ff,$ff,$ff,$ef,$c7,$ef,$ff,$ff  ; $1f Plus
+                        
 ; Board Pieces $20 - $2f
             .byte $00,$00,$00,$00,$00,$00,$00,$00  ; $20 Space
             .byte $ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff  ; $21 Reverse Space
