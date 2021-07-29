@@ -28,10 +28,10 @@ Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$31
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Game Configuration
 FX_VOICE    = $900c             ; Sound effects voice
-IN_YEAR     = 2050              ; Starting year
+IN_YEAR     = 2021              ; Starting year
 IN_TREASURY = 500               ; Starting treasury
 MENU_ITEMS  = 10                ; Number of actions in menu
-ROAD_COST   = 1
+LAKE_COUNT  = 6                 ; Max number of Lakes on map
 
 ; Character Constants
 CHR_CURSOR  = $3f               ; Cursor
@@ -52,10 +52,10 @@ CHR_BURN    = $2f               ; Burned down
 ; Color Constants
 COL_CURSOR  = 6                 ; Cursor, blue
 COL_ROAD    = 0                 ; Road, black
-COL_UNOCC   = 4                 ; Unoccupied properties, purple
-COL_OCC     = 3                 ; Occupied properties, cyan
-COL_SCHOOL  = 7                 ; School, yellow
-COL_WIND    = 1                 ; Wind Farm, white
+COL_UNOCC   = 0                 ; Unoccupied properties, black
+COL_OCC     = 0                 ; Occupied properties, black
+COL_SCHOOL  = 4                 ; School, purple
+COL_WIND    = 4                 ; Wind Farm, purple
 COL_FIRE    = 2                 ; Firehouse, red
 COL_CLINIC  = 2                 ; Clinic, red
 COL_PARK    = 5                 ; Park, green
@@ -103,6 +103,7 @@ VALUE       = $ab               ; Current property value
 ADJ_ST      = $ac               ; Adjacent structures bitfield
 HOUSE_COUNT = $ad               ; House Count
 BUS_COUNT   = $ae               ; Business Count
+POP         = $af               ; Population (2 bytes)
 COL_PTR     = $f3               ; Screen color pointer (2 bytes)
 COOR_X      = $f9               ; x coordinate
 COOR_Y      = $fa               ; y coordinate
@@ -111,9 +112,8 @@ P_RAND      = $fd               ; Pseudorandom seed (2 bytes)
 TIME        = $ff               ; Jiffy counter
 
 ; Game State
-POP         = $1ffb             ; Population (2 bytes)
+YEAR        = $1ffb             ; Year (2 bytes)
 TREASURY    = $1ffd             ; Treasury (2 bytes)
-TURN_NUM    = $1fff             ; Turn Number (1 byte)
 
 ; System Resources - Memory
 CINV        = $0314             ; ISR vector
@@ -193,8 +193,11 @@ Action:     jsr Joystick        ; Debounce the fire button before entering
             jmp Main            ; Back to Main
 ch_space:   cmp #$20            ; If there's already something else there,
             beq show            ;   start the build index on that item, to
-            lda #0              ;   make it harder to accidentally remove
-            sta BUILD_IX        ;   intentional development.
+            cmp #CHR_BURN       ;   make it harder to accidentally remove
+            beq show            ;   intentional development. Fire is
+            ldx #0              ;   considered "nothing else there."
+            stx BUILD_IX        ;   ,,
+            jsr Structures      ; Show nearby structures
 show:       ldx #0              ; Show the item being selected
             lda BUILD_IX        ; ,,
             clc                 ; ,,
@@ -229,7 +232,12 @@ Build:      jsr Joystick        ; Debounce the fire button for build
             cpx #FIRE           ; ,,
             beq Build           ; ,,
             lsr ACTION_FL       ; Clear Action flag
-            lda BUILD_IX        ; Get the built character
+            ldy #7              ; Clear status display
+            lda #$20            ; ,,
+-loop:      sta SCREEN+58,y     ; ,,
+            dey                 ; ,,
+            bpl loop            ; ,,
+            lda BUILD_IX        ; Get the built structure
             beq cancel          ;
             cmp #MENU_ITEMS-1   ; Has the turn been ended?
             bne item            ; ,,
@@ -284,9 +292,9 @@ move_wind:  ldx #0
             ldx #5
 rotate:     ldy #4
 -loop:      lda WFAnim1,x
-            sta WindFarm,y
+            sta WindFarm+1,y
             lda BurnAnim1,x
-            sta Burning,y
+            sta Burning+1,y
             inx
             dey
             bpl loop
@@ -373,14 +381,9 @@ DrawStats:  ldy #1              ; Plot population display
             ldx #1              ; ,,
             clc                 ; ,,
             jsr PLOT            ; ,,
-            lda TURN_NUM        ; Add starting year (IN_YEAR) to
-            clc                 ;   the turn number
-            adc #<IN_YEAR       ;   ,,
-            tax                 ;   ,, X is low byte for PRTFIX
-            lda #>IN_YEAR       ;   ,,
-            bcc pr_year         ;   ,,
-            adc #0              ;   ,, (Adds 1 to high because carry is set)
-pr_year:    jmp PRTFIX          ;   ,,
+            ldx YEAR            ; Numeric year display
+            lda YEAR+1          ; ,,
+pr_year:    jmp PRTFIX          ; ,,
             
 ; Roads
 ; Add the proper roads                  
@@ -551,31 +554,36 @@ next_adj:   dey                 ; Iterate through entire pattern
 ; Advance to Next Turn            
 NextTurn:   lda UNDER           ; Replace previous character
             jsr Place           ; ,,
-            inc TURN_NUM        ; Increment turn number (year)
-            lda #0              ; Reset build index
+            inc YEAR            ; Increment year
+            bne reset_ix        ; ,,
+            inc YEAR+1          ; ,,
+reset_ix:   lda #0              ; Reset build index
             sta BUILD_IX        ; ,,
-            inc $900f
             jsr Upkeep      
-            dec $900f
             jsr DrawStats
             jsr DrawCursor
             jmp Main  
             
-Test:       jsr FollowRoad
-            ldy #0
--loop:      ldx #$30
-            asl
-            pha
-            bcc write
-            inx
-write:      txa
-            sta $1e00,y
-            pla
-            iny
-            cpy #8
+; Show Structures
+; Nearby the current coordinate            
+Structures: sei                 ; Stop interrupts to prevent cursor flash
+            jsr FollowRoad      ;   during the FollowRoad routine
+            jsr Adjacents       ; Add adjacent structures to road-connected
+            and #BIT_PARK + BIT_BUS
+            ora NEARBY_ST       ;   structures
+            sta NEARBY_ST       ;   ,,
+            ldy #0              ; Y is the bit index
+            ldx #7              ; X is the screen position
+-loop:      lda BitStr,y
+            lsr NEARBY_ST
+            bcc skip_pos
+            sta SCREEN+58,x
+            dex
+skip_pos:   iny
+            cpy #7
             bne loop
-            jsr Coor2Ptr
-            rts            
+            cli
+            rts    
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; UPKEEP ROUTINES
@@ -645,7 +653,7 @@ next_map:   inc COOR_Y
             sta COOR_Y          ;   location
             pla                 ;   ,,
             sta COOR_X          ;   ,,
-            ldy #22
+            ldy #21
             lda #$20
 -loop:      sta SCREEN+44,y     ; Clear progress bar
             dey
@@ -933,13 +941,14 @@ SetColor:   pha
 ; SETUP ROUTINES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Set up hardware
-Setup:      lda #142            ; Set background color
+Setup:      lda #254            ; Set background color
             sta SCRCOL          ; ,,
             lda #0              ; Turn off sound registers
             sta NOISE           ; ,, 
             sta VOICEL          ; ,,
             sta VOICEM          ; ,,
             sta VOICEH          ; ,,
+            sta ACTION_FL       ; Clear Action flag
             lda #$ff            ; Set custom character location
             sta VICCR5          ; ,,
             lda #$7f            ; Set DDR to read East
@@ -974,31 +983,40 @@ InitGame:   lda #<Header        ; Show Board Header
             sta BUILD_IX        ; ,,
             sta POP             ; Initialize population
             sta POP+1           ; ,,
-            sta ACTION_FL       ; Clear Action flag
             sta TIME            ; Initialize timer
-            sta TURN_NUM        ; Initialize turn number
             lda #<IN_TREASURY   ; Set initial treasury amount
             sta TREASURY        ; ,,
             lda #>IN_TREASURY   ; ,,
             sta TREASURY+1      ; ,,
-            ldy #5
--loop:      jsr Rand31
-            cmp #22
-            bcs loop
-            sta COOR_X
-rnd_y:      jsr Rand31
-            cmp #20
-            bcs rnd_y
-            sta COOR_Y
-            jsr Coor2Ptr
-            lda #CHR_LAKE
-            jsr Place 
-            dey
-            bne loop  
+            lda #<IN_YEAR       ; Initialize year
+            sta YEAR            ; ,,
+            lda #>IN_YEAR       ; ,,
+            sta YEAR+1          ; ,,
+            ldy #LAKE_COUNT     ; Add a number of Lakes to the board
+-loop:      jsr Rand31          ;   Lakes can't be removed by the player,
+            cmp #20             ;   but they count as Parks when adjacent
+            bcs loop            ;   to a House, without the maintenance
+            sta COOR_X          ;   cost.
+rnd_y:      jsr Rand31          ;   ,,
+            cmp #18             ;   ,,
+            bcs rnd_y           ;   ,,
+            sta COOR_Y          ;   ,,
+            inc COOR_X          ;   Keeping the Lakes off the borders, mostly
+            inc COOR_Y          ;     for aesthetic reasons
+            jsr Coor2Ptr        ;   Place the Lake
+            lda #CHR_LAKE       ;   ,,
+            jsr Place           ;   ,,
+            dey                 ;   ,,
+            bne loop            ;   ,,
             lda #10             ; Set initial coordinates
             sta COOR_X          ; ,,
             sta COOR_Y          ; ,,
             jsr DrawStats       ; Show stats in header
+            ldy #21             ; Set status bar color to blue
+            lda #6              ; ,,
+-loop:      sta COLOR+44,y      ; ,,
+            dey                 ; ,,
+            bpl loop            ; ,,
             jsr DrawCursor      ; Show cursor
             rts
 
@@ -1024,7 +1042,7 @@ Colors:     .byte COL_ROAD,COL_UNOCC,COL_UNOCC,COL_WIND
             .byte COL_SCHOOL,COL_FIRE,COL_CLINIC,COL_PARK
             .byte 0,COL_OCC,COL_OCC,COL_LAKE,COL_BURN   
             
-; Adjacent building values
+; Adjacent structure values
 ; Wind Farm = Bit 0
 ; School    = Bit 1
 ; Firehouse = Bit 2
@@ -1037,6 +1055,10 @@ Colors:     .byte COL_ROAD,COL_UNOCC,COL_UNOCC,COL_WIND
 AdjValues:  .byte 0,0,0,BIT_WIND,BIT_SCHOOL,BIT_FIRE,BIT_CLINIC,BIT_PARK
             .byte 0,BIT_HOUSE,BIT_BUS,BIT_PARK,BIT_BURN        
 
+; Structure at Bit Number (see above)
+BitStr:     .byte CHR_WIND,CHR_SCHOOL,CHR_FIRE,CHR_CLINIC,CHR_PARK
+            .byte CHR_HOUSE,CHR_BUS
+            
 ; Search pattern for adjacent search, starting from index 3 (PTR minus 22)
 CarPatt:   .byte 21,2,21,0
 
@@ -1100,20 +1122,20 @@ CharSet:    .byte $00,$aa,$aa,$aa,$00,$aa,$aa,$aa  ; 0000 Parking Lot
 ; Board Pieces $20 - $2f
             .byte $00,$00,$00,$00,$00,$00,$00,$00  ; $20 Space
             .byte $ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff  ; $21 Reverse Space
-            .byte $00,$44,$28,$10,$28,$44,$00,$00  ; $22 Cancel
+            .byte $00,$00,$44,$28,$10,$28,$44,$00  ; $22 Cancel
             .byte $00,$00,$fe,$00,$6c,$00,$fe,$00  ; $23 Road Placeholder       
-            .byte $10,$38,$6c,$fe,$5c,$74,$74,$00  ; $24 Unocc. House
-            .byte $00,$00,$ff,$d5,$ff,$d5,$df,$00  ; $25 Unocc. Business
-WindFarm:   .byte $10,$10,$38,$44,$10,$10,$10,$00  ; $26 Wind Farm
-            .byte $18,$10,$7c,$ee,$fe,$aa,$aa,$00  ; $27 School
-            .byte $0e,$0a,$fe,$fe,$8a,$ae,$ae,$00  ; $28 Firehouse
-            .byte $18,$92,$fe,$ee,$c6,$ee,$fe,$00  ; $29 Clinic
-            .byte $00,$40,$e0,$e0,$e0,$4e,$4a,$00  ; $2a Park
-            .byte $00,$88,$cc,$ee,$cc,$88,$00,$00  ; $2b End Turn
-            .byte $10,$38,$6c,$fe,$5c,$74,$74,$00  ; $2c House
-            .byte $00,$00,$ff,$d5,$ff,$d5,$df,$00  ; $2d Business
-            .byte $38,$6c,$d6,$fe,$dc,$ac,$78,$00  ; $2e Lake
-Burning:    .byte $10,$18,$3c,$6e,$ee,$cc,$78,$00  ; $2f Burned Down
+            .byte $00,$10,$38,$6c,$c6,$44,$44,$7c  ; $24 Unocc. House
+            .byte $00,$00,$60,$fe,$82,$aa,$82,$fe  ; $25 Unocc. Business
+WindFarm:   .byte $00,$10,$10,$38,$44,$10,$10,$10  ; $26 Wind Farm
+            .byte $00,$18,$10,$7c,$ee,$fe,$aa,$aa  ; $27 School
+            .byte $00,$0e,$0a,$fe,$fe,$8a,$ae,$ae  ; $28 Firehouse
+            .byte $00,$18,$92,$fe,$ee,$c6,$ee,$fe  ; $29 Clinic
+            .byte $00,$00,$40,$e0,$e0,$e0,$4e,$4a  ; $2a Park
+            .byte $00,$00,$88,$cc,$ee,$cc,$88,$00  ; $2b End Turn
+            .byte $00,$10,$38,$6c,$fe,$5c,$74,$74  ; $2c House
+            .byte $00,$00,$60,$fe,$aa,$fe,$aa,$fa  ; $2d Business
+            .byte $00,$38,$6c,$d6,$fe,$dc,$ac,$78  ; $2e Lake
+Burning:    .byte $00,$10,$18,$3c,$6e,$ee,$cc,$78  ; $2f Burned Down
                         
 ; Numerals $30 - $39
             .byte $ff,$ff,$83,$bb,$bb,$bb,$83,$ff  ; 0
