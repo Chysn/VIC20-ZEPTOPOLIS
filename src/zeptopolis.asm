@@ -57,7 +57,7 @@ COL_OCC     = 0                 ; Occupied properties, black
 COL_SCHOOL  = 4                 ; School, purple
 COL_WIND    = 4                 ; Wind Farm, purple
 COL_FIRE    = 2                 ; Firehouse, red
-COL_CLINIC  = 2                 ; Clinic, red
+COL_CLINIC  = 6                 ; Clinic, blue
 COL_PARK    = 5                 ; Park, green
 COL_LAKE    = 6                 ; Lake, blue
 COL_BURN    = 2                 ; Burned Down, red
@@ -1126,14 +1126,14 @@ pre_charset:
 .dsb (*-pre_charset)
 * = $1c00
 CharSet:    .byte $00,$aa,$aa,$aa,$00,$aa,$aa,$aa  ; 0000 Parking Lot 
-            .byte $54,$54,$44,$54,$54,$44,$7c,$00  ; 0001 N			  
-            .byte $00,$00,$7f,$40,$4c,$40,$7f,$00  ; 0010 E			        
+            .byte $54,$92,$ba,$ba,$82,$7c,$00,$00  ; 0001 N			  
+            .byte $00,$1e,$21,$2c,$2c,$2c,$21,$1e  ; 0010 E			        
             .byte $54,$54,$47,$40,$4c,$40,$3f,$00  ; 0011 N/E           
-            .byte $00,$7c,$44,$44,$54,$54,$44,$44  ; 0100 S
+            .byte $00,$00,$7c,$82,$ba,$ba,$82,$44  ; 0100 S
             .byte $54,$54,$44,$44,$54,$54,$44,$44  ; 0101 N/S            
             .byte $00,$00,$3f,$40,$56,$50,$47,$44  ; 0110 S/E            
             .byte $54,$54,$47,$40,$54,$50,$47,$44  ; 0111 N/S/E          
-            .byte $00,$00,$fe,$02,$da,$02,$fe,$00  ; 1000 W		
+            .byte $00,$78,$84,$34,$f4,$34,$84,$78  ; 1000 W		
             .byte $54,$54,$c4,$14,$d4,$04,$f8,$00  ; 1001 N/W            
             .byte $00,$00,$ff,$00,$cc,$00,$ff,$00  ; 1010 E/W            
             .byte $54,$54,$c7,$00,$cc,$00,$ff,$00  ; 1011 E/W/N          
