@@ -104,6 +104,8 @@ ADJ_ST      = $ac               ; Adjacent structures bitfield
 HOUSE_COUNT = $ad               ; House Count
 BUS_COUNT   = $ae               ; Business Count
 POP         = $af               ; Population (2 bytes)
+YR_EXPEND   = $b1               ; Previous year expenditure (2 bytes)
+YR_REVENUE  = $b3               ; Previous year revenue (2 bytes)
 COL_PTR     = $f3               ; Screen color pointer (2 bytes)
 COOR_X      = $f9               ; x coordinate
 COOR_Y      = $fa               ; y coordinate
@@ -328,8 +330,14 @@ subtract:   sta TMP
             sec
             sbc TMP
             sta TREASURY
-            bcs spend_r
+            bcs sp_budget
             dec TREASURY+1
+sp_budget:  lda YR_EXPEND       ; Record to year's budget for expenditure
+            clc                 ; ,,
+            adc TMP             ; ,,
+            sta YR_EXPEND       ; ,,
+            bcc spend_rs        ; ,,
+            inc YR_EXPEND+1     ; ,,
 spend_r:    clc
 spend_rs:   rts 
             
@@ -340,8 +348,14 @@ Revenue:    lda VALUE           ; Get revenue from the current VALUE
             clc                 ; Add value to Treasury
             adc TREASURY        ; ,,
             sta TREASURY        ; ,,
-            bcc revenue_r       ; ,,
+            bcc rv_budget       ; ,,
             inc TREASURY+1      ; ,,
+rv_budget:  lda YR_REVENUE      ; Record to year's budget for revenue
+            clc                 ; ,,
+            adc VALUE           ; ,,
+            sta YR_REVENUE      ; ,,
+            bcc revenue_r       ; ,,
+            inc YR_REVENUE+1    ; ,,
 revenue_r:  rts                       
                         
 ; Draw Stats 
@@ -384,7 +398,22 @@ DrawStats:  ldy #1              ; Plot population display
             ldx YEAR            ; Numeric year display
             lda YEAR+1          ; ,,
 pr_year:    jmp PRTFIX          ; ,,
-            
+       
+; Draw Budget
+; On status line       
+DrawBudget: lda #<BudgetR       ; Show Budget Revenue Header
+            ldy #>BudgetR       ; ,,
+            jsr PRTSTR          ; ,,
+            ldx YR_REVENUE      ; Show Revenue
+            lda YR_REVENUE+1    ; ,,
+            jsr PRTFIX          ; ,,
+            lda #<BudgetE       ; Show Budget Expenditure Header
+            ldy #>BudgetE       ; ,,
+            jsr PRTSTR          ; ,,
+            ldx YR_EXPEND       ; Show Expenditure
+            lda YR_EXPEND+1     ; ,,
+            jmp PRTFIX          ; ,,
+                        
 ; Roads
 ; Add the proper roads                  
 Roads:      lda COOR_X          ; Save cursor coordinates
@@ -559,8 +588,13 @@ NextTurn:   lda UNDER           ; Replace previous character
             inc YEAR+1          ; ,,
 reset_ix:   lda #0              ; Reset build index
             sta BUILD_IX        ; ,,
+            sta YR_EXPEND       ; Reset budgets
+            sta YR_EXPEND+1     ; ,,
+            sta YR_REVENUE      ; ,,
+            sta YR_REVENUE+1    ; ,,
             jsr Upkeep      
             jsr DrawStats
+            jsr DrawBudget
             jsr DrawCursor
             jmp Main  
             
@@ -1027,6 +1061,10 @@ rnd_y:      jsr Rand31          ;   ,,
 Header:     .asc $93,$1f,"PQRSTU!!!!VW!!XYZ[",$5c,"]",$5e,$5f
             .asc ":!!!!!;!!!!!<!!>!=!!!!",$00
 
+; Budget Headers
+BudgetR     .asc $13,$11,$11,"     ",$12,"+",$92,";",$00
+BudgetE     .asc $20,$12,"-",$92,";",$00
+
 ; Direction tables
 JoyTable:   .byte $00,$04,$80,$08,$10,$20          ; Corresponding direction bit
 DirTable:   .byte $01,$02,$04,$08                  ; Index to bit value
@@ -1151,7 +1189,7 @@ Burning:    .byte $00,$10,$18,$3c,$6e,$ee,$cc,$78  ; $2f Burned Down
             
 ; Indicators $3a - $3f
             .byte $c7,$a7,$ff,$ef,$c7,$83,$d7,$ff  ; $3a Population
-            .byte $c7,$93,$31,$39,$19,$93,$c7,$ff  ; $3b Money
+            .byte $e3,$c9,$98,$9c,$8c,$c9,$e3,$ff  ; $3b Money
             .byte $cf,$d7,$d7,$11,$5d,$5b,$03,$ff  ; $3c Satisfaction
             .byte $83,$ff,$ab,$ff,$ab,$ff,$ab,$ff  ; $3d Calendar
             .byte $ff,$ff,$bb,$f7,$ef,$df,$bb,$ff  ; $3e Percent Sign >
