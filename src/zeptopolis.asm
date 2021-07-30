@@ -106,6 +106,8 @@ BUS_COUNT   = $ae               ; Business Count
 POP         = $af               ; Population (2 bytes)
 YR_EXPEND   = $b1               ; Previous year expenditure (2 bytes)
 YR_REVENUE  = $b3               ; Previous year revenue (2 bytes)
+HAPC1       = $b5               ; Happiness calculator register 1
+HAPC2       = $b6               ; Happiness calculator register 2 (2 bytes)
 COL_PTR     = $f3               ; Screen color pointer (2 bytes)
 COOR_X      = $f9               ; x coordinate
 COOR_Y      = $fa               ; y coordinate
@@ -383,13 +385,15 @@ DrawStats:  ldy #1              ; Plot population display
             lda #$21            ; Space for treasury decrease
             jsr CHROUT          ; ,,
             ; SATISFACTION
+            jsr GetHappy        ; Compute happiness
             ldy #13             ; Plot satisfaction display
             ldx #1              ; ,,
             clc                 ; ,,            
             jsr PLOT            ; ,,
-            ldx HAPPY           ; Numeric satisfaction display
-            lda #0              ;   (always a two-digit number)
-            jsr PRTFIX          ;   ,,
+            lda HAPPY           ; Happiness display
+            jsr CHROUT          ; ,,
+            lda #"0"            ; ,,
+            jsr CHROUT          ; ,,
             ; YEAR
             ldy #18             ; Plot year display
             ldx #1              ; ,,
@@ -682,7 +686,7 @@ next_map:   inc COOR_Y
             sta COOR_Y
             inc COOR_X
             ldy COOR_X
-            lda #$c3            ; Progress bar
+            lda #$e6            ; Progress bar
             sta SCREEN+43,y     ; ,,
             cpy #22             ; ,,
             bne loop            ; ,,
@@ -973,6 +977,57 @@ SetColor:   pha
             pla
             sta (COL_PTR,x)
             rts
+            
+
+; Get Happiness
+; Basically an employment percentage from 10% to 90%
+; 90% if the number of employers exceeds the number of workers
+; 0% if there are no businesses
+GetHappy:   sed                     ; Set decimal mode
+            lda #"9"                ; Starting default
+            sta HAPPY               ; ,,
+            ldy HOUSE_COUNT         ; Number of houses
+            cpy BUS_COUNT           ; ,,
+            bcc happy_r             ; Same or more employers than workers so 90%
+            beq happy_r             ; ,,
+            jsr hex2deci            ;   Convert to decimal
+            sty HAPC1               ;   And store
+            lda #"1"                ; "1" if no businesses to divide
+            sta HAPPY               ; ,,
+            ldy BUS_COUNT           ; Number of businesses
+            beq happy_r             ;   No businesses so 10%
+            jsr hex2deci            ;   Convert to decimal
+            sty HAPC2               ;   And store
+            lda #0                  ; Store high byte for businesses
+            sta HAPC2+1             ;   x 10
+            ldx #4                  ; Multiply business by 10
+-loop:      asl HAPC2               ; ,,
+            rol HAPC2+1             ; ,,
+            dex                     ; ,,
+            bne loop                ; ,,
+-loop:      inc HAPPY               ; HAPPY is the quotient's 10s place
+            lda HAPC2               ; ,,
+            sec                     ; Subtract the divisor from the numerator
+            sbc HAPC1               ;  ,,
+            sta HAPC2               ; ,,
+            bcs sub_div             ; ,,
+            dec HAPC2+1             ; ,,
+sub_div:    lda HAPC2+1             ; Subtract until the numerator is gone 
+            bpl loop                ; 
+            dec HAPPY               ; Decrement to account for starting point
+            dec HAPPY               ; ,,
+happy_r:    cld                     ; Clear decimal mode
+            rts
+
+; Hex to Decimal
+; For decimal mode conversion               
+hex2deci:   lda #$00
+-loop:      clc
+            adc #$01
+            dey
+            bne loop
+            tay
+            rts            
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; SETUP ROUTINES
@@ -1126,14 +1181,14 @@ pre_charset:
 .dsb (*-pre_charset)
 * = $1c00
 CharSet:    .byte $00,$aa,$aa,$aa,$00,$aa,$aa,$aa  ; 0000 Parking Lot 
-            .byte $54,$92,$ba,$ba,$82,$7c,$00,$00  ; 0001 N			  
-            .byte $00,$1e,$21,$2c,$2c,$2c,$21,$1e  ; 0010 E			        
+            .byte $54,$54,$44,$54,$54,$44,$7c,$00  ; 0001 N			  
+            .byte $00,$00,$7f,$40,$4c,$40,$7f,$00  ; 0010 E			        
             .byte $54,$54,$47,$40,$4c,$40,$3f,$00  ; 0011 N/E           
-            .byte $00,$00,$7c,$82,$ba,$ba,$82,$44  ; 0100 S
+            .byte $00,$7c,$44,$44,$54,$54,$44,$44  ; 0100 S
             .byte $54,$54,$44,$44,$54,$54,$44,$44  ; 0101 N/S            
             .byte $00,$00,$3f,$40,$56,$50,$47,$44  ; 0110 S/E            
             .byte $54,$54,$47,$40,$54,$50,$47,$44  ; 0111 N/S/E          
-            .byte $00,$78,$84,$34,$f4,$34,$84,$78  ; 1000 W		
+            .byte $00,$00,$fe,$02,$da,$02,$fe,$00  ; 1000 W		
             .byte $54,$54,$c4,$14,$d4,$04,$f8,$00  ; 1001 N/W            
             .byte $00,$00,$ff,$00,$cc,$00,$ff,$00  ; 1010 E/W            
             .byte $54,$54,$c7,$00,$cc,$00,$ff,$00  ; 1011 E/W/N          
