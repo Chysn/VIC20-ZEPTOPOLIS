@@ -73,7 +73,7 @@ BIT_HOUSE   = %00100000
 BIT_BUS     = %01000000
 BIT_BURN    = %10000000
 
-; Constants
+; Directional Constants
 NORTH       = 0
 EAST        = 1
 SOUTH       = 2
@@ -81,13 +81,15 @@ WEST        = 3
 FIRE        = 4
 
 ; Game Memory
+UNDER       = $00               ; Character under pointer
 TMP         = $01               ; Subroutine temporary storage
-UNDER       = $07               ; Character under pointer
+TMP_PTR     = $02               ; Temporary pointer (2 bytes)
+CURR_ST     = $04               ; Current structure list (nearby or adjacent)
 PREV_X      = $08               ; Previous x coordinate
 PREV_Y      = $09               ; Previous y coordinate
 BUILD_IX    = $0a               ; Build index
 ITERATOR    = $0b               ; Local iterator
-HAPPY       = $0c               ; Satisfaction (10% - 99%)
+HAPPY       = $0c               ; Satisfaction (10% - 90%)
 BUILD_MASK  = $a0               ; Build mask (for wind farms)
 ACTION_FL   = $a1               ; Action flag
 NEARBY_ST   = $a2               ; Nearby structures bitfield
@@ -106,8 +108,12 @@ BUS_COUNT   = $ae               ; Business Count
 POP         = $af               ; Population (2 bytes)
 YR_EXPEND   = $b1               ; Previous year expenditure (2 bytes)
 YR_REVENUE  = $b3               ; Previous year revenue (2 bytes)
-HAPC1       = $b5               ; Happiness calculator register 1
-HAPC2       = $b6               ; Happiness calculator register 2 (2 bytes)
+DENOM       = $b5               ; Happiness calculator register 1
+NUMER       = $b6               ; Happiness calculator register 2 (2 bytes)
+QUAKE_YR    = $b8               ; Year of next earthquake
+QUAKE_FL    = $ba               ; Earthquake flag
+SMART_COUNT = $bb               ; Count of Houses with nearby Schools
+SMART       = $bc               ; Education (+0 - 9%)
 COL_PTR     = $f3               ; Screen color pointer (2 bytes)
 COOR_X      = $f9               ; x coordinate
 COOR_Y      = $fa               ; y coordinate
@@ -127,6 +133,9 @@ SCREEN      = $1e00             ; Screen character memory (unexpanded)
 BOARD       = SCREEN+66         ; Starting address of board
 COLOR       = $9600             ; Screen color memory (unexpanded)
 IRQ         = $eb15             ; System ISR return point
+ORIG_HORIZ  = $ede4             ; Default horizontal screen position
+HORIZ       = $9000             ; Screen position
+VICCR4      = $9004             ; Raster location
 VICCR5      = $9005             ; Character map register
 VOICEH      = $900c             ; High sound register
 VOICEM      = $900b             ; Mid sound register
@@ -201,7 +210,7 @@ ch_space:   cmp #$20            ; If there's already something else there,
             beq show            ;   intentional development. Fire is
             ldx #0              ;   considered "nothing else there."
             stx BUILD_IX        ;   ,,
-            jsr Structures      ; Show nearby structures
+            jsr DrawInfo        ; Show info about this structure
 show:       ldx #0              ; Show the item being selected
             lda BUILD_IX        ; ,,
             clc                 ; ,,
@@ -209,6 +218,8 @@ show:       ldx #0              ; Show the item being selected
             sta (PTR,x)         ; ,,
 -wait:      jsr Joystick        ; Wait for the action
             bmi wait            ; ,,
+            lda #%00001111      ; Reset time to reset cursor flash
+            sta TIME            ; ,,
             cpx #FIRE           ; If fire is pressed, build the selected item
             beq Build           ; ,,
 ch_prev:    cpx #WEST           ; If moving left, decrement the menu
@@ -236,9 +247,9 @@ Build:      jsr Joystick        ; Debounce the fire button for build
             cpx #FIRE           ; ,,
             beq Build           ; ,,
             lsr ACTION_FL       ; Clear Action flag
-            ldy #7              ; Clear status display
+            ldy #8              ; Clear status display
             lda #$20            ; ,,
--loop:      sta SCREEN+58,y     ; ,,
+-loop:      sta SCREEN+57,y     ; ,,
             dey                 ; ,,
             bpl loop            ; ,,
             lda BUILD_IX        ; Get the built structure
@@ -246,8 +257,12 @@ Build:      jsr Joystick        ; Debounce the fire button for build
             cmp #MENU_ITEMS-1   ; Has the turn been ended?
             bne item            ; ,,
             jmp NextTurn        ; ,,
-item:       lda #1              ; Each build takes 1 coin
-            jsr Spend           ; ,,
+item:       lda NewDevCost      ; Default to new development cost
+            ldx UNDER           ; But if there's something already there,
+            cpx #$20            ; ,,
+            beq buy             ; ,,
+            lda UpdateCost      ; Use the update cost instead
+buy:        jsr Spend           ; Try to do the spend
             bcs cancel          ; ,,
             jsr DrawStats       ; Update Treasury amount
             lda BUILD_IX
@@ -275,9 +290,8 @@ to_main:    jmp Main
 ; Replaces the BASIC ISR and performs these functions
 ;   - Advances the timer, used for delays
 ;   - Handles Wind Farm rotation
-;   - Services sound effects       
+;   - Services music player       
 ISR:        inc TIME            ; Circumventing BASIC's clock, so advance it
-            ;jsr FXService       ; Play any sound effects that are going on
             bit ACTION_FL       ; Flash cursor if in Action mode
             bpl move_wind       ; If not in Action mode, move wind turbines
             ldy #6              ; Default to blue
@@ -291,7 +305,7 @@ flash_cur:  tya                 ; ,,
 move_wind:  ldx #0
             lda #%00011111      
             bit TIME
-            bne isr_r
+            bne svc_quake
             bvc rotate
             ldx #5
 rotate:     ldy #4
@@ -302,6 +316,15 @@ rotate:     ldy #4
             inx
             dey
             bpl loop
+svc_quake:  bit QUAKE_FL
+            bpl isr_r
+-loop:      lda VICCR4          ; Do wait for raster to be at top, so that
+            bne loop            ;   the earthquake isn't all rastery
+            lda HORIZ
+            eor #$01
+            sta HORIZ
+            jsr Rand15          ; Randomize volume for rumbling sound
+            sta VOLUME          ; ,,
 isr_r:      jmp IRQ             ; Return from interrupt
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -392,7 +415,7 @@ DrawStats:  ldy #1              ; Plot population display
             jsr PLOT            ; ,,
             lda HAPPY           ; Happiness display
             jsr CHROUT          ; ,,
-            lda #"0"            ; ,,
+            lda SMART           ; With school percentage
             jsr CHROUT          ; ,,
             ; YEAR
             ldy #18             ; Plot year display
@@ -493,12 +516,11 @@ restore:    pla
 is_road:    sec
             rts  
 
-; Follow Road
+; Nearby Structures
 ; Follow all combinations of between 1 and 4 roads, starting from
 ; the current coordinate. Return adjacent buildings in A.
 ; See AdjValues table for the meaning of the bits in the bitfield.
-; 
-FollowRoad: lda #0              ; Initialize pattern
+Nearby:     lda #0              ; Initialize pattern
             sta PATTERN         ; ,,
             sta NEARBY_ST       ; Initialize adjacent structures
             lda COOR_X          ; Set starting point in PREV_X and _Y
@@ -547,6 +569,9 @@ restore_c:  ldy PREV_X          ; Restore original coordinates
             ldy PREV_Y          ; ,,
             sty COOR_Y          ; ,,
             jsr Coor2Ptr
+            jsr Adjacents       ; Consider cardinally-adjacent structures to be
+            ora NEARBY_ST       ; nearby
+            sta NEARBY_ST       ; ,,
             lda NEARBY_ST       ; Put cumulative bitfield in A
             rts
                       
@@ -596,34 +621,124 @@ reset_ix:   lda #0              ; Reset build index
             sta YR_EXPEND+1     ; ,,
             sta YR_REVENUE      ; ,,
             sta YR_REVENUE+1    ; ,,
-            jsr Upkeep      
-            jsr DrawStats
-            jsr DrawBudget
-            jsr DrawCursor
+            jsr Quake           ; Is there an earthquake this year????
+            jsr Upkeep          ; Perform calculations and maintenance
+            jsr DrawStats       ; Draw the new stats bar
+            jsr DrawBudget      ; Show the previous year's budget
+            jsr DrawCursor      ; Put the cursor back
             jmp Main  
             
-; Show Structures
-; Nearby the current coordinate            
-Structures: sei                 ; Stop interrupts to prevent cursor flash
-            jsr FollowRoad      ;   during the FollowRoad routine
-            and #$ff - BIT_PARK ; (Parks are counted by adjacency only)
-            sta NEARBY_ST       ; ,,
-            jsr Adjacents       ; Add adjacent structures to road-connected
-            and #BIT_PARK + BIT_BUS
-            ora NEARBY_ST       ;   structures
-            sta NEARBY_ST       ;   ,,
+; Draw Info
+; - If the structure has a maintenance cost, show that
+; - If the structure is a House or Business, show estimated revenue
+; - If the strucutre has no maintenance cost, show structures nearby           
+DrawInfo:   lda UNDER           ; If the structure under the cursor
+            cmp #CHR_WIND       ;   has no maintenance cost,
+            bcc struct          ;   then go to the structure display
+            cmp #CHR_PARK+1     ;   ,,
+            bcs struct          ;   ,,
+            sec                 ; Otherwise, get the structure index
+            sbc #CHR_WIND       ;   (relative to CHR_WIND)
+            tay                 ;   and use that index to look up this
+            lda MaintCosts,y    ;   structure's maintenance cost.
+            pha                 ;   ,,
+            ldx #2              ; Plot the cursor position
+            ldy #19             ; ,,
+            cmp #10             ;   (If the cost is more than 9, add another
+            bcc u10             ;   column to the display to make room
+            dey                 ;   ,,)
+u10:        clc                 ; ,,
+            jsr PLOT            ; ,,
+            lda #$5e            ; Minus sign
+            jsr CHROUT          ; ,,
+            lda #";"            ; Show the coin
+            jsr CHROUT          ; ,,
+            pla                 ; Show the numeric maintenance cost
+            tax                 ; ,,
+            lda #0              ; ,,
+            jmp PRTFIX          ; ,,
+struct:     sei                 ; Stop interrupts to prevent cursor flash
+            jsr Nearby          ;   during the Nearby routine
+            sta TMP             ; Use TMP for structure list
             ldy #0              ; Y is the bit index
             ldx #7              ; X is the screen position
--loop:      lda BitStr,y
-            lsr NEARBY_ST
-            bcc skip_pos
-            sta SCREEN+58,x
-            dex
-skip_pos:   iny
-            cpy #7
-            bne loop
+-loop:      lda BitChr,y        ; Get the character corresponding to the bit
+            lsr TMP             ; Is this bit set?
+            bcc skip_pos        ; ,,
+            sta SCREEN+55,x     ; If the bit is set, add the character to the
+            dex                 ;   display
+skip_pos:   iny                 ; Move to the next bit
+            cpy #7              ; ,,
+            bne loop            ; ,,
+            lda UNDER           ; Get character at pointer for additional info
+            cmp #CHR_HOUSE
+            beq show_val
+            cmp #CHR_BUS
+            bne struct_r            
+show_val:   jsr Assess
+            lda #$3b            ; Coin symbol
+            sta SCREEN+63       ; ,,
+            lda #$1f            ; Plus sign
+            sta SCREEN+64       ; ,,
+            lda VALUE  
+            clc
+            adc #$30            ; Convert value into a numeral
+            sta SCREEN+65     
+struct_r:   cli
+            rts 
+      
+; Handle Earthquake Disaster            
+Quake:      lda YEAR            ; Is it the Year of the Earthquake?
+            cmp QUAKE_YR        ; ,,
+            bne no_quake        ; ,,
+            lda YEAR+1          ; ,,
+            cmp QUAKE_YR+1      ; ,,
+            beq yes_quake       ; ,,
+no_quake:   rts
+yes_quake:  lda #$ff            ; Turn on earthquake sound
+            sta NOISE           ; ,,
+            sta VOICEL          ; ,,
+            sec                 ; Set Earthquake flag
+            ror QUAKE_FL        ; ,,
+            lda COOR_X          ; Save the current coordinates
+            pha                 ; ,,
+            lda COOR_Y          ; ,,
+            pha                 ; ,,
+            ldy QuakePower      ; How many map cells are going to be destroyed?
+-loop:      jsr Rand31          ; Get location of damage
+            cmp #21             ; ,,
+            bcs loop            ; ,,
+            sta COOR_X          ; ,,
+-rnd_y:     jsr Rand31          ; ,,
+            cmp #19             ; ,,
+            bcs rnd_y           ; ,,
+            sta COOR_Y          ; ,,
+            jsr Coor2Ptr        ; Get address of coordinate
+            ldx #0              ; Lakes can't be destroyed by earthquakes
+            lda (PTR,x)         ; ,,
+            cmp #CHR_LAKE       ; ,,
+            beq next_dmg        ; ,,
+            lda #CHR_BURN       ; Place damage on screen
+            jsr Place           ; ,,
+            lda #50             ; Delay during the shaking
+            jsr Delay           ; ,,
+next_dmg:   dey                 ; Go back for more destruction!
+            bne loop            ; ,,
+            sei                 ; ----QUAKE IS OVER----
+            lsr QUAKE_FL        ; Reset flag
+            lda ORIG_HORIZ      ; Restore the original horiz position
+            sta HORIZ           ; ,,
             cli
-            rts    
+            pla                 ; Restore coordinates
+            sta COOR_Y          ; ,,
+            pla                 ; ,,
+            sta COOR_X          ; ,,
+            lda #0              ; Turn off the earthquake sound
+            sta NOISE           ; ,,
+            sta VOICEL          ; ,,
+            lda #$0a            ; Set normal volume
+            sta VOLUME          ; ,,
+            jmp NextQuake       ; Set the date of the next disaster       
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; UPKEEP ROUTINES
@@ -645,6 +760,7 @@ Upkeep:     jsr ClrStatus       ; Clear status bar
             sta SOLD_BUSES      ;   occupancy
             sta HOUSE_COUNT     ; Reset House count
             sta BUS_COUNT       ; Reset Business count
+            sta SMART_COUNT     ; Reset smart Houses count
             sta POP             ; Reset population for recalculation
             sta POP+1           ; ,,
             lda COOR_X          ; Save cursor coordinates
@@ -686,9 +802,11 @@ next_map:   inc COOR_Y
             sta COOR_Y
             inc COOR_X
             ldy COOR_X
-            lda #$e6            ; Progress bar
+            lda #$c3            ; Progress bar
             sta SCREEN+43,y     ; ,,
-            cpy #22             ; ,,
+            lda #4              ; ,, (Slight delay for progress)
+            jsr Delay           ; ,,
+            cpy #22             ; Iterate through all X coordinates
             bne loop            ; ,,
             pla                 ; Restore the coordinates to pre-upkeep
             sta COOR_Y          ;   location
@@ -721,13 +839,13 @@ maint_r:    rts
 ; Rule - If the unoccupied house has active power, it can sell.
 SellHouse:  lda SOLD_HOUSES     ; If a house was sold this turn, return
             bne sellh_r         ; ,,
-            jsr FollowRoad      ; A house must have active power
+            jsr Nearby          ; A house must have active power
             and #BIT_WIND       ; ,,
             beq sellh_r         ; ,,
             lda #CHR_HOUSE      ; Place the house
             jsr Place           ; ,,
             inc SOLD_HOUSES     ; Increment sell count
-            bcc sellh_r
+            jmp CompHouse       ; Compute new House
 sellh_r:    rts
 
 ; Sell Business
@@ -739,7 +857,7 @@ sellh_r:    rts
 ;         (connected by roads) it can sell.
 SellBus:    lda SOLD_BUSES      ; If a business was sold this turn, return
             bne sellb_r         ; ,,
-            jsr FollowRoad      ; A business must have active power to sell
+            jsr Nearby          ; A business must have active power to sell
             tax                 ; ,,
             and #BIT_WIND       ; ,,
             beq sellb_r         ; ,,
@@ -752,52 +870,51 @@ SellBus:    lda SOLD_BUSES      ; If a business was sold this turn, return
 sold_bus:   lda #CHR_BUS        ; Place sold business
             jsr Place           ; ,,
             inc SOLD_BUSES      ; Increment sell count
+            jmp CompBus         ; Compute new Business
 sellb_r:    rts
 
 ; Compute House
-CompHouse:  lda #0              ; Initialize property value
-            sta VALUE           ; ,,
-            jsr FollowRoad      ; Get nearby structures
+; - Determine whether the family leaves or stays
+; - Assess the House value
+; - Add the tax revenue from the House
+CompHouse:  jsr Nearby          ; Get nearby structures
             lda #BIT_WIND       ; Is there a Wind Farm nearby?
             bit NEARBY_ST       ; ,,
             bne ch_hfire        ; If so, go to next check
+            jsr Rand7           ; If not, there's a 1 in 8 chance that
+            bne ch_hfire        ;   occupants move out
             lda #CHR_UHOUSE     ; Otherwise, they move out
             jmp Place           ; ,,
 ch_hfire:   lda #BIT_FIRE       ; Is there a Firehouse nearby?
             bit NEARBY_ST       ; ,,
-            bne ch_hschool      ; If so, house is safe from fire
+            bne ch_hclinic      ; If so, house is safe from fire
             jsr Rand15          ; 1 in 16 chance of fire
-            bne ch_hschool      ; ,,
+            bne ch_hclinic      ; ,,
             lda #CHR_BURN       ; Burn the house down
-            jmp Place           ;
-ch_hschool: lda #BIT_SCHOOL     ; Is there a school nearby?
+            jmp Place
+ch_emp:     lda HAPPY           ; If employment is less than 80%         
+            cmp #"8"            ;   there's a 1 in 8 chance that the
+            bcs ch_hclinic      ;   occupants will move out
+            jsr Rand7           ;   ,,
+            bne ch_hclinic      ;   ,,
+            lda #CHR_UHOUSE     ;   ,,
+            jmp Place           ;   ,,             
+ch_hclinic: lda #BIT_CLINIC     ; Is there a Clinic nearby?
             bit NEARBY_ST       ; ,,
-            beq ch_hclinic      ; ,,
-            inc VALUE           ; Schools contribute 3 to value
-            inc VALUE           ; ,,
-            inc VALUE           ; ,,
-ch_hclinic: lda #BIT_CLINIC     ; Is there a clinic nearby?
-            bit NEARBY_ST       ; ,,
-            beq ch_hbus         ; ,,
-            inc VALUE           ; Clinics contribute 2 to value
-            inc VALUE           ; ,,
-            inc POP             ; Clinics add 1 to population
-            bne ch_hbus         ;   per house
+            beq ch_hschool      ; ,,
+            lda #$02            ; If so, add to 2 population to this
+            clc                 ;   House
+            adc POP             ;   ,,
+            sta POP             ;   ,,
+            bcc ch_hschool      ;   ,,
             inc POP+1           ;   ,,
-ch_hbus:    lda #BIT_BUS        ; Is there a business nearby?
+ch_hschool: lda #BIT_SCHOOL     ; Is there a School nearby?
             bit NEARBY_ST       ; ,,
-            beq ch_hadj         ; ,,
-            inc VALUE           ; Business contributes 1 to value
-ch_hadj:    jsr Adjacents       ; Get cardinally-adjacent structures
-            lda #BIT_PARK       ; Is there a Park adjacent?
-            bit ADJ_ST          ; ,,
-            beq ch_hhouse       ; ,,
-            inc VALUE           ; Park contribues 1 to value
-ch_hhouse:  lda #BIT_HOUSE      ; Is there a House right next door?
-            bit ADJ_ST          ; ,,
-            beq hrevenue        ; ,,
-            dec VALUE           ; Adjacent House reduces value by 1
-hrevenue:   jsr Revenue         ; Add property value to Treasury
+            beq hrevenue        ; ,,           
+            inc SMART_COUNT     ; If so, count this as a smart House
+hrevenue:   lda #CHR_HOUSE      ; Assess House property value
+            jsr Assess          ; ,,
+            jsr Revenue         ; Add property value to Treasury
             jsr Rand7           ; Add people to each house (0-7)
             sec                 ; ,, (SEC for +1)
             adc POP             ; ,,
@@ -807,38 +924,77 @@ hrevenue:   jsr Revenue         ; Add property value to Treasury
 comph_r:    inc HOUSE_COUNT     ; Count Houses
             rts
 
-; Compute Business            
-CompBus:    lda #0              ; Initialize property value
-            sta VALUE           ; ,,
-            jsr FollowRoad      ; Get nearby structures
+; Compute Business 
+; - Determine whether the Business leaves or stays
+; - Assess the Business value
+; - Add the tax revenue from the Business
+CompBus:    jsr Rand31          ; Every so often, a Business just
+            bne bus_near        ;   closes up shop and leaves. This is
+            lda #CHR_UBUS       ;   just the nature of Businesses.
+            jmp Place           ;   ,,
+bus_near:   jsr Nearby          ; Get nearby structures
             lda #BIT_WIND       ; Is there a Wind Farm nearby?
             bit NEARBY_ST       ; ,,
             bne ch_bfire        ; If so, go to next check
-            lda #CHR_UBUS       ; Otherwise, they move out
-            jmp Place           ; ,,
+            jsr Rand3           ; If not, there's a 1 in 4 chance that
+            bne ch_bfire        ;   the Business moves out
+            lda #CHR_UBUS       ;   ,,
+            jmp Place           ;   ,,
 ch_bfire:   lda #BIT_FIRE       ; Is there a Firehouse nearby?
             bit NEARBY_ST       ; ,,
-            bne bhas_fh         ; If so, business is safe from fire
+            bne brevenue        ; If so, business is safe from fire
             jsr Rand15          ; 1 in 16 chance of fire
-            bne ch_bhouse       ; ,,
+            bne brevenue        ; ,,
             lda #CHR_BURN       ; Burn the business down
             jmp Place           ; ,,
-bhas_fh:    inc VALUE           ; Firehouse contributes 2 to value
-            inc VALUE           ; ,,
-ch_bhouse:  lda #BIT_HOUSE      ; Is there a House nearby?
-            bit NEARBY_ST       ; ,,
-            beq ch_badj         ; ,,
-            inc VALUE           ; A House contributes 2 to value
-            inc VALUE           ; ,,
-ch_badj:    jsr Adjacents       ; Get cardinally-adjacent structures
-            lda #BIT_BUS        ; ,,
-            bit ADJ_ST          ; ,,
-            beq brevenue        ; ,,
-            inc VALUE           ; Neighboring Business contributes 1 to value
-brevenue:   jsr Revenue         ; Add property value to Treasury
+brevenue:   lda #CHR_BUS        ; Assess Business property value
+            jsr Assess          ; ,,
+            jsr Revenue         ; Add property value to Treasury
             inc BUS_COUNT       ; Count Businesses
             rts           
-                  
+            
+; Assess House or Business Value
+; A is CHR_HOUSE or CHR_BUS
+; Store result in VALUE
+; This assumes that Nearby has already been called so that NEARBY_ST and ADJ_ST
+; are set correctly.
+Assess:     ldy InValBus        ; Initialize property values (for business)
+            sty VALUE           ; ,,
+            ldy #<BusVals       ; Set assessment table
+            sty TMP_PTR         ; ,,
+            ldy #>BusVals       ; ,,
+            sty TMP_PTR+1       ; ,,
+            cmp #CHR_HOUSE      ; ,,
+            bne assess_st       ; ,,
+            lda InValHouse      ; Override property value initialization
+            sta VALUE           ; ,,
+            ldy #<HouseVals     ; Override assessment table
+            sty TMP_PTR         ; ,,
+            ldy #>HouseVals     ; ,,
+            sty TMP_PTR+1       ; ,,
+assess_st:  lda NEARBY_ST       ; Use nearby structures as the current
+            sta CURR_ST         ;   assessment type
+            jsr AssessLkup      ; Assess nearby structures
+            lda ADJ_ST          ; Use adjacent structures as the next
+            sta CURR_ST         ;   assessment type
+            lda #14             ; Advance the table pointer by 14 bytes so that
+            clc                 ;   it now references the Adjacent assessment
+            adc TMP_PTR         ;   table
+            sta TMP_PTR         ;   ,,
+            bcc AssessLkup      ;   ,,
+            inc TMP_PTR+1       ;   ,,
+AssessLkup: ldy #6              ; Look up structures in the
+-loop:      lda PowersOf2,y     ;   value table and add them to
+            bit CURR_ST         ;   the VALUE storage
+            beq assess_nx       ;   ,,
+            lda (TMP_PTR),y     ;   ,,
+            clc                 ;   ,,
+            adc VALUE           ;   ,,
+            sta VALUE           ;   ,,
+assess_nx:  dey                 ;   ,,
+            bpl loop            ;   ,,
+            rts
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; SUBROUTINES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -852,6 +1008,8 @@ Delay:      clc
             rts 
             
 ; Pseudo Random
+Rand3:      lda #%01000000      ; 2-bit
+            .byte $3c
 Rand7:      lda #%00100000      ; 3-bit
             .byte $3c
 Rand15:     lda #%00010000      ; 4-bit
@@ -978,50 +1136,87 @@ SetColor:   pha
             sta (COL_PTR,x)
             rts
             
-
 ; Get Happiness
 ; Basically an employment percentage from 10% to 90%
 ; 90% if the number of employers exceeds the number of workers
-; 0% if there are no businesses
-GetHappy:   sed                     ; Set decimal mode
-            lda #"9"                ; Starting default
-            sta HAPPY               ; ,,
-            ldy HOUSE_COUNT         ; Number of houses
-            cpy BUS_COUNT           ; ,,
-            bcc happy_r             ; Same or more employers than workers so 90%
-            beq happy_r             ; ,,
-            jsr hex2deci            ;   Convert to decimal
-            sty HAPC1               ;   And store
-            lda #"1"                ; "1" if no businesses to divide
-            sta HAPPY               ; ,,
-            ldy BUS_COUNT           ; Number of businesses
-            beq happy_r             ;   No businesses so 10%
-            jsr hex2deci            ;   Convert to decimal
-            sty HAPC2               ;   And store
-            lda #0                  ; Store high byte for businesses
-            sta HAPC2+1             ;   x 10
-            ldx #4                  ; Multiply business by 10
--loop:      asl HAPC2               ; ,,
-            rol HAPC2+1             ; ,,
-            dex                     ; ,,
-            bne loop                ; ,,
--loop:      inc HAPPY               ; HAPPY is the quotient's 10s place
-            lda HAPC2               ; ,,
-            sec                     ; Subtract the divisor from the numerator
-            sbc HAPC1               ;  ,,
-            sta HAPC2               ; ,,
-            bcs sub_div             ; ,,
-            dec HAPC2+1             ; ,,
-sub_div:    lda HAPC2+1             ; Subtract until the numerator is gone 
-            bpl loop                ; 
-            dec HAPPY               ; Decrement to account for starting point
-            dec HAPPY               ; ,,
-happy_r:    cld                     ; Clear decimal mode
+; 0% if there are no Businesses
+GetHappy:   sed                 ; Set decimal mode
+            lda #"9"            ; Starting default
+            sta HAPPY           ; ,,
+            ldy HOUSE_COUNT     ; Number of houses
+            cpy BUS_COUNT       ; ,,
+            bcs happy_r         ; Same or more employers than workers so 90%
+            jsr Hex2Deci        ; Convert to decimal
+            sty DENOM           ;   and store
+            lda #"1"            ; "1" if no businesses to divide
+            sta HAPPY           ; ,,
+            ldy BUS_COUNT       ; Number of businesses
+            beq happy_r         ;   No businesses so 10%
+            jsr Hex2Deci        ;   Convert to decimal
+            sty NUMER           ;   And store
+            jsr Divide          ; Multiply NUMER by 10
+            clc                 ; Add quotient to HAPPY
+            adc HAPPY           ; ,,
+            sta HAPPY           ; ,,
+            dec HAPPY           ; Decrement to compensate for starting "1"
+happy_r:    cld                 ; Clear decimal mode
+            ; Fall through to GetSmart
+            
+; Get Smartness
+; Percentage of the number of Houses with a School nearby, to the
+; tens place.
+; 0% if there are no Schools or Houses
+GetSmart:   sed                 ; Set decimal mode
+            lda #"0"            ; Starting default
+            sta SMART           ; ,,
+            ldy HOUSE_COUNT     ; Stay at "0" if either count is 0
+            beq smart_r         ; ,,
+            lda SMART_COUNT     ; ,,
+            beq smart_r         ; ,,
+            cpy SMART_COUNT     ; If the counts are the same, force
+            bne do_div          ;   the count to "9"
+            lda #"9"            ;   ,,
+            sta SMART           ;   ,,
+            bne smart_r         ;   ,,
+do_div:     jsr Hex2Deci        ; Convert to decimal
+            sty DENOM           ;   and store
+            ldy SMART_COUNT     ; Number of smart Houses
+            jsr Hex2Deci        ; Convert to decimal
+            sty NUMER           ;   and store
+            jsr Divide          ; Perform division
+            clc                 ; Add the quotient to the numeral
+            adc SMART           ;   character
+            sta SMART           ;   ,,
+smart_r:    cld
+            rts
+
+; Divide Numerator x 10 / Denominator
+; Assumes decimal mode is set  
+; A is the quotient to tens place
+Divide:     lda #0              ; Set the high byte of the numerator
+            sta NUMER+1         ; ,,
+            ldx #4              ; Shift everything left by 4 nybbles
+-loop:      asl NUMER           ; ,,
+            rol NUMER+1         ; ,,
+            dex                 ; ,,
+            bne loop            ; ,,
+            ldx #0              ; X is now the quotient
+-loop:      inx                 ; Subtraction count
+            lda NUMER           ; Subtract denominator from numerator
+            sec                 ; ,,
+            sbc DENOM           ; ,,
+            sta NUMER           ; ,,
+            bcs sub_div         ; ,,
+            dec NUMER+1         ; ,,
+sub_div:    lda NUMER+1         ; If the numerator goes below 0, division is
+            bpl loop            ;   done
+            dex                 ; Decrement to compensate for starting inx
+            txa                 ; Returning 
             rts
 
 ; Hex to Decimal
 ; For decimal mode conversion               
-hex2deci:   lda #$00
+Hex2Deci:   lda #$00
 -loop:      clc
             adc #$01
             dey
@@ -1075,6 +1270,9 @@ InitGame:   lda #<Header        ; Show Board Header
             sta BUILD_IX        ; ,,
             sta POP             ; Initialize population
             sta POP+1           ; ,,
+            sta HOUSE_COUNT     ; Initialize counts
+            sta BUS_COUNT       ; ,,
+            sta SMART_COUNT     ; ,,
             sta TIME            ; Initialize timer
             lda #<IN_TREASURY   ; Set initial treasury amount
             sta TREASURY        ; ,,
@@ -1089,7 +1287,7 @@ InitGame:   lda #<Header        ; Show Board Header
             cmp #20             ;   but they count as Parks when adjacent
             bcs loop            ;   to a House, without the maintenance
             sta COOR_X          ;   cost.
-rnd_y:      jsr Rand31          ;   ,,
+-rnd_y:     jsr Rand31          ;   ,,
             cmp #18             ;   ,,
             bcs rnd_y           ;   ,,
             sta COOR_Y          ;   ,,
@@ -1110,7 +1308,21 @@ rnd_y:      jsr Rand31          ;   ,,
             dey                 ; ,,
             bpl loop            ; ,,
             jsr DrawCursor      ; Show cursor
-            rts
+            ; Fall through to NextQuake
+            
+; Next Quake Year
+; The next earthquake is predestined 
+NextQuake:  lda YEAR+1          ; Set the year high byte
+            sta QUAKE_YR+1      ; ,,
+            lda QuakeMarg       ; Get a random number from the quake's
+            jsr PRand           ;   margin (a power of two)
+            clc                 ; Add this margin to the known frequency
+            adc QuakeFreq       ; ,,
+            adc YEAR            ; ,,
+            sta QUAKE_YR        ; ,,
+            bcc nxquake_r
+            inc QUAKE_YR+1
+nxquake_r:  rts
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; DATA TABLES
@@ -1120,8 +1332,8 @@ Header:     .asc $93,$1f,"PQRSTU!!!!!!!!VWXYZ[",$5c,"]"
             .asc ":!!!!!;!!!!!<!!>!=!!!!",$00
 
 ; Budget Header
-BudgetR     .asc $13,$11,$11,";",$21,$5f,$00
-BudgetE     .asc $21,$21,$5e,$00
+BudgetR     .asc $13,$11,$11,$5f,";",$00
+BudgetE     .asc $21,$5e,";",$00
 
 ; Direction tables
 JoyTable:   .byte $00,$04,$80,$08,$10,$20          ; Corresponding direction bit
@@ -1138,7 +1350,7 @@ Colors:     .byte COL_ROAD,COL_UNOCC,COL_UNOCC,COL_WIND
             .byte COL_SCHOOL,COL_FIRE,COL_CLINIC,COL_PARK
             .byte 0,COL_OCC,COL_OCC,COL_LAKE,COL_BURN   
             
-; Adjacent structure values
+; Adjacent structure bit numbers
 ; Wind Farm = Bit 0
 ; School    = Bit 1
 ; Firehouse = Bit 2
@@ -1151,16 +1363,54 @@ Colors:     .byte COL_ROAD,COL_UNOCC,COL_UNOCC,COL_WIND
 AdjValues:  .byte 0,0,0,BIT_WIND,BIT_SCHOOL,BIT_FIRE,BIT_CLINIC,BIT_PARK
             .byte 0,BIT_HOUSE,BIT_BUS,BIT_PARK,BIT_BURN        
 
-; Structure at Bit Number (see above)
-BitStr:     .byte CHR_WIND,CHR_SCHOOL,CHR_FIRE,CHR_CLINIC,CHR_PARK
+; Structure character at bit number
+; See bit numbers in AdjValues
+BitChr:     .byte CHR_WIND,CHR_SCHOOL,CHR_FIRE,CHR_CLINIC,CHR_PARK
             .byte CHR_HOUSE,CHR_BUS
             
+; Powers of 2 for bitfield lookup
+PowersOf2:  .byte 1,2,4,8,16,32,64,128
+                        
 ; Search pattern for adjacent search, starting from index 3 (PTR minus 22)
 CarPatt:   .byte 21,2,21,0
 
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; MODPACK TABLES
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; The following tables can be used to modify the behavior of the game, to make
+; game balance harder or easier. Save a set of 38 bytes to the MODPACK address,
+; and load with LOAD"MODPACK",8,1
+MODPACK:
+
+NewDevCost: .byte 5
+UpdateCost: .byte 10
+
+; Inherent values of Businesses and Houses
+InValBus:   .byte 1
+InValHouse: .byte 1
+
 ; Yearly maintenance costs of maintainable structures
-;                 Wind Farm,School, Firehouse, Clinic, Park)
-MaintCosts: .byte 5,        15,     10,        10,     1
+;                 Wind Farm,School, Firehouse, Clinic, Park
+MaintCosts: .byte 5,        15,     10,        10,     2
+
+; Assessed values for nearby structures  
+; See structure number in BitChr
+BusVals:    .byte 0,0,2,0,0,1,0
+HouseVals:  .byte 0,3,0,2,0,0,1
+
+; Assessed values for cardinally-adjacent structures
+BusAVals:   .byte $ff,0,0,0,0,2,1
+HouseAVals: .byte 0,0,0,0,2,$ff,0
+
+; Earthquake frequency
+; The next earthquake will happen QuakeFreq years from now, plus rand(QuakMarg) 
+; years. When an earthquake happens, this timer will be reset.
+; QuakePower determines how much damage an earthquake does
+; The default is 26 + (0-7) years, or between 26-33 years
+QuakeFreq:  .byte 26
+QuakeMarg:  .byte %00100000
+QuakePower: .byte 10
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; CUSTOM CHARACTER SET
