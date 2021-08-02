@@ -446,8 +446,11 @@ DrawStats:  ldy #1              ; Plot population display
             jsr PRTFIX          ; ,,
             lda #$21            ; Space for treasury decrease
             jsr CHROUT          ; ,,
+            ldy TREASURY+1      ; If the Treasury has gone below 256,
+            bne draw_sat        ;   add a second space as a guard against
+            jsr CHROUT          ;   single-turn precipitous drop
             ; SATISFACTION
-            jsr GetHappy        ; Compute happiness
+draw_sat:   jsr GetHappy        ; Compute happiness
             jsr GetSmart        ; Compute education level
             ldy #13             ; Plot satisfaction display
             ldx #1              ; ,,
