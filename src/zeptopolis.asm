@@ -767,6 +767,8 @@ yes_tor:    lda COOR_X          ; Save the current coordinates for later
             pha                 ; ,,
             lda COOR_Y          ; ,,
             pha                 ; ,,
+            lda #14             ; Change screen to dark and foreboding
+            sta SCRCOL          ; ,,
             jsr FiresOut        ; Clear most of the remaining fires
             sec                 ; Turn on tornado flag to disable fire animation
             ror TORN_FL         ; ,,
@@ -786,16 +788,17 @@ yes_tor:    lda COOR_X          ; Save the current coordinates for later
             cpy #10             ; ,,
             bne loop            ; ,,
             ldy TornPath        ; Maximum path length
--loop:      lda #14             ; Flash stormy screen between light and dark
-            sta SCRCOL          ; ,,
-            lda #CHR_BURN       ; Place the damage on the screen
+-loop:      lda #CHR_BURN       ; Place the damage on the screen
             jsr Place           ; ,,
-            lda #10        
-            jsr Delay
-            lda #254            ; Change screen back to original screen color
+            ldx #3
+flashes:    lda VICCR4          ; Wait for raster to get to 0 before changing
+            bne flashes         ;   screen color
+            lda TornScr,x       ; Some flashes of lightning
             sta SCRCOL          ; ,,
-            lda #4              ; Just a quick flash
+            lda TornFlash,x     ; ,,
             jsr Delay           ; ,,
+            dex                 ; ,,
+            bpl flashes         ; ,,
 tor_dir:    jsr Rand3           ; Pick a random direction
             cpy TornPath        ; If this is the first iteration, don't check
             beq skip_back       ;   for backtracking
@@ -1534,6 +1537,10 @@ CarPatt:    .byte 21,2,21,0
 ; Determined with electronic tuner
 Notes:      .byte 194,197,201,204,207,209,212,214,217,219,221,223,225,194,207
 
+; Tornado lightning patterns
+TornScr:    .byte 254,14,254,14
+TornFlash:  .byte 7,4,3,30
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; MODPACK TABLES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1584,7 +1591,7 @@ QuakePower: .byte 12
 ; Tornados are checked every turn. If the pseudo-random value is 0, there will
 ; be a tornado.
 ; TornPath determines the maximum path length
-; The default is a 1 in 8 chance per year, with a maximum path length of 7
+; The default is a 1 in 8 chance per year, with a maximum path length of 6
 TornFreq:   .byte %00100000
 TornPath:   .byte 6
 
