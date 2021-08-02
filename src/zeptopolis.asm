@@ -171,6 +171,7 @@ Welcome:    jsr Setup           ; Set up hardware and initialize game
                                 ; Unlike most of my games, there's no welcome
                                 ;   screen or "press fire to start" text. The
                                 ;   game simply starts when the program does.
+            ; Fall through to Main                                
 
 Main:       jsr Joystick        ; Wait for joystick movement
             bmi Main            ; ,,
@@ -211,10 +212,10 @@ new_pos:    jsr DrawCursor      ; Draw the new cursor
 Action:     jsr Joystick        ; Debounce the fire button before entering
             cpx #FIRE           ; ,,
             beq Action          ; ,,
+            lda #%00000001      ; Change the musical theme each turn
+            eor MUSREG          ; ,,
+            sta MUSREG          ; ,,
             sec                 ; Set Action flag
-            lda #%00000001      ;
-            eor MUSREG
-            sta MUSREG
             ror ACTION_FL       ; ,,
             lda UNDER           ; Get character at cursor
             cmp #CHR_LAKE       ; If it's a lake, allow no action here
@@ -766,7 +767,7 @@ yes_quake:  lda #$ff            ; Turn on earthquake sound
             lda COOR_Y          ; ,,
             pha                 ; ,,
             ldy QuakePower      ; How many map cells are going to be destroyed?
-            jsr RandCoor        ; Randomize coordinate
+-loop:      jsr RandCoor        ; Randomize coordinate
             ldx #0              ; Lakes can't be destroyed by earthquakes
             lda (PTR,x)         ; ,,
             cmp #CHR_LAKE       ; ,,
@@ -869,7 +870,7 @@ dec_vol:    lda #5              ; ,,
             sta NOISE           ; ,,
             lda #$0a            ; Set volume back to default
             sta VOLUME          ; ,,
-            asl TORN_FL         ; Turn Tornado flag off for animations
+            lsr TORN_FL         ; Turn Tornado flag off for animations
             lda #254            ; Restore proper screen color
             sta SCRCOL          ; ,,
             pla                 ; Get the old coordinates back
@@ -1636,8 +1637,8 @@ QuakePower: .byte 12
 ; Tornados are checked every turn. If the pseudo-random value is 0, there will
 ; be a tornado.
 ; TornPath determines the maximum path length
-; The default is a 1 in 8 chance per year, with a maximum path length of 6
-TornFreq:   .byte %00100000
+; The default is a 1 in 16 chance per year, with a maximum path length of 6
+TornFreq:   .byte %00010000
 TornPath:   .byte 6
 
 
