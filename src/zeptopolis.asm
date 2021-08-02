@@ -239,7 +239,7 @@ ch_prev:    cpx #WEST           ; If moving left, decrement the menu
             bne ch_next         ; ,,
             dec BUILD_IX        ; ,,
             bpl action_d        ; ,,
-            lda #MENU_ITEMS-1   ; Or wrap around to the last item
+action_eot: lda #MENU_ITEMS-1   ; Or wrap around to the last item
             sta BUILD_IX        ; ,,
             bne action_d        ; ,,
 ch_next:    cpx #EAST           ; If moving right, increment the menu
@@ -251,10 +251,13 @@ ch_next:    cpx #EAST           ; If moving right, increment the menu
             lda #0              ; ,,
             sta BUILD_IX        ; ,,
 ch_cancel:  cpx #SOUTH          ; If moving down, cancel the action mode
-            bne wait            ; ,,
+            bne ch_end          ; ,,
             lda #0              ; Set build index to 0 (cancel)
             sta BUILD_IX        ; ,,
             beq Build           ; Then go to regular build subroutine
+ch_end:     cpx #NORTH          ; If moving up, go directly to end of
+            bne wait            ;   turn
+            beq action_eot      ;   ,,
 action_d:   jsr Joystick        ; Debounce joystick for action select
             bpl action_d        ; ,,
             jmp show            ; Go back to show item
@@ -274,7 +277,11 @@ Build:      jsr Joystick        ; Debounce joystick for build
             cmp #MENU_ITEMS-1   ; Has the turn been ended?
             bne item            ; ,,
             jmp NextTurn        ; ,,
-item:       lda NewDevCost      ; Default to new development cost
+item:       clc                 ; If the built character is the same as the
+            adc #CHR_CANCEL     ;   one already here, then cancel the
+            cmp UNDER           ;   build, to save the money
+            beq cancel          ;   ,,
+            lda NewDevCost      ; Default to new development cost
             ldx UNDER           ; But if there's something already there,
             cpx #$20            ; ,,
             beq buy             ; ,,
@@ -284,7 +291,7 @@ buy:        jsr Spend           ; Try to do the spend
             jsr DrawStats       ; Update Treasury amount
             lda BUILD_IX
             cmp #IDX_ROAD       ; If the player is building a road,
-            bne reg_item        ;   ,,
+            bne reg_item        ;   
             lda #%11011110      ;   character offset for placeholder.
 reg_item:   clc                 ; Show the item at the cursor
             adc #CHR_CANCEL     ; ,,
@@ -367,44 +374,52 @@ OnlyCursor: lda #CHR_CURSOR     ; Place the cursor
 
 ; Spend Treasury
 ; In A
-; If there's no enough left, do not subtract, and set Carry            
-Spend:      ldy TREASURY+1      ; If high byte of Treasury is non-zero, then of
+; If there's no enough left, do not subtract, and set Carry 
+; Always add amount to yearly expenditures, even if the amount is
+; unaffordable. This is for budgeting information purposes.         
+Spend:      sta TMP
+            lda YR_EXPEND       ; Record to year's budget for expenditure
+            clc                 ; ,,
+            adc TMP             ; ,,
+            sta YR_EXPEND       ; ,,
+            bcc ch_afford       ; ,,
+            inc YR_EXPEND+1     ; ,,
+ch_afford:  ldy TREASURY+1      ; If high byte of Treasury is non-zero, then of
             bne subtract        ;   course the item is affordable
             cmp TREASURY        ; If the amount in the Treasury is less than
             beq subtract        ;   required amount
             bcs spend_rs        ;   fail with carry set
-subtract:   sta TMP
-            lda TREASURY
-            sec
-            sbc TMP
-            sta TREASURY
-            bcs sp_budget
-            dec TREASURY+1
-sp_budget:  lda YR_EXPEND       ; Record to year's budget for expenditure
-            clc                 ; ,,
-            adc TMP             ; ,,
-            sta YR_EXPEND       ; ,,
-            bcc spend_rs        ; ,,
-            inc YR_EXPEND+1     ; ,,
-spend_r:    clc
+subtract:   lda TREASURY        ; ,,
+            sec                 ; ,,
+            sbc TMP             ; ,,
+            sta TREASURY        ; ,,
+            bcs spend_r         ; ,,
+            dec TREASURY+1      ; ,,
+spend_r:    clc                 ; Succeed with carry clear
 spend_rs:   rts 
             
-; Revenue to Treasure
+; Revenue to Budget
 ; In VALUE
+; The yearly revenue budget is added to the Treasury in Collect, below.
 Revenue:    lda VALUE           ; Get revenue from the current VALUE
             bmi revenue_r       ; If it's negative, never mind
             clc                 ; Add value to Treasury
-            adc TREASURY        ; ,,
-            sta TREASURY        ; ,,
-            bcc rv_budget       ; ,,
-            inc TREASURY+1      ; ,,
-rv_budget:  lda YR_REVENUE      ; Record to year's budget for revenue
-            clc                 ; ,,
-            adc VALUE           ; ,,
+            adc YR_REVENUE      ; ,,
             sta YR_REVENUE      ; ,,
             bcc revenue_r       ; ,,
             inc YR_REVENUE+1    ; ,,
-revenue_r:  rts                       
+revenue_r:  rts  
+
+; Collect Revenue
+; Add yearly revenue budget (YR_REVENUE) to Treasury
+Collect:    lda YR_REVENUE
+            clc
+            adc TREASURY
+            sta TREASURY
+            lda YR_REVENUE+1
+            adc TREASURY+1
+            sta TREASURY+1
+            rts
                         
 ; Draw Stats 
 ; Population   = Column 23
@@ -649,6 +664,7 @@ reset_ix:   lda #0              ; Reset build index
             jsr Tornado         ; Is there a tornado this year?
             jsr Quake           ; Is there an earthquake this year????
             jsr Upkeep          ; Perform calculations and maintenance
+            jsr Collect         ; Collect income
             jsr DrawStats       ; Draw the new stats bar
             jsr DrawBudget      ; Show the previous year's budget
             jsr DrawCursor      ; Put the cursor back
