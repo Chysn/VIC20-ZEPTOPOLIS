@@ -27,7 +27,9 @@ Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$31
 ; LABEL DEFINITIONS
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Game Configuration
-MENU_ITEMS  = 10                ; Number of actions in menu
+MENU_ITEMS  = 9                 ; Number of actions in menu
+HIGH_ATTR   = %00100000         ; High business attrition
+LOW_ATTR    = %00001000         ; Low business attrition
 
 ; Character Constants
 CHR_CURSOR  = $3f               ; Cursor
@@ -110,6 +112,8 @@ NUMER       = $b6               ; Happiness calculator register 2 (2 bytes)
 QUAKE_FL    = $b8               ; Earthquake flag
 SMART_COUNT = $b9               ; Count of Houses with nearby Schools
 SMART       = $ba               ; Education (+0 - 9%)
+BUS_CAP     = $bb               ; Business Activity (2 bytes)
+BUS_ATTR    = $bd               ; Business Attrition value
 COL_PTR     = $f3               ; Screen color pointer (2 bytes)
 COOR_X      = $f9               ; x coordinate
 COOR_Y      = $fa               ; y coordinate
@@ -239,7 +243,7 @@ ch_prev:    cpx #WEST           ; If moving left, decrement the menu
             bne ch_next         ; ,,
             dec BUILD_IX        ; ,,
             bpl action_d        ; ,,
-action_eot: lda #MENU_ITEMS-1   ; Or wrap around to the last item
+            lda #MENU_ITEMS-1   ; Or wrap around to the last item
             sta BUILD_IX        ; ,,
             bne action_d        ; ,,
 ch_next:    cpx #EAST           ; If moving right, increment the menu
@@ -257,7 +261,8 @@ ch_cancel:  cpx #SOUTH          ; If moving down, cancel the action mode
             beq Build           ; Then go to regular build subroutine
 ch_end:     cpx #NORTH          ; If moving up, go directly to end of
             bne wait            ;   turn
-            beq action_eot      ;   ,,
+            lda #MENU_ITEMS     ; EOT is the item AFTER the last menu item
+            sta BUILD_IX        ; ,,
 action_d:   jsr Joystick        ; Debounce joystick for action select
             bpl action_d        ; ,,
             jmp show            ; Go back to show item
@@ -274,7 +279,7 @@ Build:      jsr Joystick        ; Debounce joystick for build
             bpl loop            ; ,,
             lda BUILD_IX        ; Get the built structure
             beq cancel          ;
-            cmp #MENU_ITEMS-1   ; Has the turn been ended?
+            cmp #MENU_ITEMS     ; Has the turn been ended?
             bne ch_dup          ; ,,
             jmp NextTurn        ; ,,
 ch_dup:     clc                 ; If the built character is the same as the
@@ -664,6 +669,8 @@ reset_ix:   lda #0              ; Reset build index
             sta YR_EXPEND+1     ; ,,
             sta YR_REVENUE      ; ,,
             sta YR_REVENUE+1    ; ,,
+            sta BUS_CAP         ; ,,
+            sta BUS_CAP+1       ; ,,
             jsr FiresOut        ; Put out last year's fires
             jsr Tornado         ; Is there a tornado this year?
             jsr Quake           ; Is there an earthquake this year????
@@ -672,6 +679,14 @@ reset_ix:   lda #0              ; Reset build index
             jsr DrawStats       ; Draw the new stats bar
             jsr DrawBudget      ; Show the previous year's budget
             jsr DrawCursor      ; Put the cursor back
+            ldy #LOW_ATTR       ; Calculate Business Attrition value
+            lda BUS_CAP         ; If the annual Business capacity is greater
+            cmp POP             ;   than the population, it means that the
+            lda BUS_CAP+1       ;   population cannot support Businesses
+            sbc POP+1           ;   ,,
+            bcc next_r          ; Population is high enough
+            ldy #HIGH_ATTR      ; Population is too low
+next_r:     sty BUS_ATTR        ; Set the Business attrition value
             jmp Main  
             
 ; Draw Info
@@ -817,11 +832,13 @@ yes_tor:    lda COOR_X          ; Save the current coordinates for later
             ldx #3              ; Flash some lightning
 flashes:    lda VICCR4          ;     (Wait for raster to get to 0 before
             bne flashes         ;       changing screen color)
-            lda TornScr,x       ; ,,
-            sta SCRCOL          ; ,,
-            lda TornFlash,x     ; ,,
-            jsr Delay           ; ,,
-            dex                 ; ,,
+            lda TornScr,x       ;   Lightning
+            sta SCRCOL          ;   ,,
+            lda TornThun,x      ;   Thunder
+            sta NOISE           ;   ,,
+            lda TornFlash,x     ;   Delay
+            jsr Delay           ;   ,,
+            dex                 ; Do next flash
             bpl flashes         ; ,,
 tor_dir:    jsr Rand3           ; Pick a random direction
             cpy TornPath        ; If this is the first iteration, don't check
@@ -978,6 +995,9 @@ sellh_r:    rts
 ;       - If the unoccupied Business has a nearby House, it can sell
 SellBus:    lda SOLD_BUSES      ; If a business was sold this turn, return
             bne sellb_r         ; ,,
+            lda BUS_ATTR        ; If the business climate is unfavorable,
+            cmp #HIGH_ATTR      ;   the Business will not sell
+            beq sellb_r         ;   ,,
             jsr Nearby          ; A business must have a nearby Wind Farm
             tax                 ; ,,
             and #BIT_WIND       ; ,,
@@ -1043,7 +1063,8 @@ comph_r:    inc HOUSE_COUNT     ; Count Houses
 ; - Determine whether the Business leaves or stays
 ; - Assess the Business value
 ; - Add the tax revenue from the Business
-CompBus:    jsr Rand31          ; Every so often, a Business just
+CompBus:    lda BUS_ATTR        ; Do population-based attrition test
+            jsr PRand           ; Every so often, a Business just
             bne bus_near        ;   closes up shop and leaves. This is
             lda #CHR_UBUS       ;   just the nature of Businesses.
             jmp Place           ;   ,,
@@ -1066,7 +1087,13 @@ brevenue:   lda #CHR_BUS        ; Assess Business property value
             jsr Assess          ; ,,
             jsr Revenue         ; Add property value to Treasury
             inc BUS_COUNT       ; Count Businesses
-            rts           
+            lda VALUE           ; Add Business's value to the Business
+            clc                 ;   Activity amount
+            adc BUS_CAP         ;   ,,
+            sta BUS_CAP         ;   ,,
+            bcc compbus_r       ;   ,,
+            inc BUS_CAP+1       ;   ,,
+compbus_r:  rts           
             
 ; Assess House or Business Value
 ; A is CHR_HOUSE or CHR_BUS
@@ -1450,6 +1477,7 @@ InitGame:   lda #<Header        ; Show Board Header
             sta BUS_COUNT       ; ,,
             sta SMART_COUNT     ; ,,
             sta TIME            ; Initialize timer
+            sta BUS_ATTR        ; Starting Business Attrition value
             lda StartTreas      ; Set initial treasury amount
             sta TREASURY        ; ,,
             lda StartTreas+1    ; ,,
@@ -1553,9 +1581,10 @@ CarPatt:    .byte 21,2,21,0
 ; Determined with electronic tuner
 Notes:      .byte 194,197,201,204,207,209,212,214,217,219,221,223,225,194,207
 
-; Tornado lightning patterns
+; Tornado thunder and lightning patterns
 TornScr:    .byte 254,15,255,14
 TornFlash:  .byte 7,4,3,30
+TornThun:   .byte $ff,$ff,$ed,$f0
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; MODPACK TABLES
