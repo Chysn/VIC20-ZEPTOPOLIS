@@ -787,13 +787,17 @@ yes_tor:    lda COOR_X          ; Save the current coordinates for later
             iny                 ; ,,         
             cpy #10             ; ,,
             bne loop            ; ,,
-            ldy TornPath        ; Maximum path length
--loop:      lda #CHR_BURN       ; Place the damage on the screen
+            ldy TornPath        ; ---- START PATH ---- Maximum path length
+-loop:      ldx #0              ; If there's a Lake at the new location, the
+            lda (PTR,x)         ;   tornado dissipates over the lake
+            cmp #CHR_LAKE       ;   ,,
+            beq tornado_r       ;   ,,
+            lda #CHR_BURN       ; Place the damage on the screen
             jsr Place           ; ,,
-            ldx #3
-flashes:    lda VICCR4          ; Wait for raster to get to 0 before changing
-            bne flashes         ;   screen color
-            lda TornScr,x       ; Some flashes of lightning
+            ldx #3              ; Flash some lightning
+flashes:    lda VICCR4          ;     (Wait for raster to get to 0 before
+            bne flashes         ;       changing screen color)
+            lda TornScr,x       ; ,,
             sta SCRCOL          ; ,,
             lda TornFlash,x     ; ,,
             jsr Delay           ; ,,
@@ -802,40 +806,40 @@ flashes:    lda VICCR4          ; Wait for raster to get to 0 before changing
 tor_dir:    jsr Rand3           ; Pick a random direction
             cpy TornPath        ; If this is the first iteration, don't check
             beq skip_back       ;   for backtracking
+            tax                 ; Keep direction safe from EOR
             eor TMP             ; If EOR with prior direction is %00000010, then
-            cmp $02             ;   the path is backtracking, so go back and
+            cmp #%00000010      ;   the path is backtracking, so go back and
             beq tor_dir         ;   choose another direction
+            txa                 ; Get back the chosen direction, which is good
 skip_back:  sta TMP             ; Store the new direction for backtrack check
             jsr MoveCoor        ; Move in that direction
             jsr CheckBound      ; Check boundary, and end tornado if it leaves
             bcs tornado_r       ;   the city
             jsr Coor2Ptr        ; Convert coordinate to pointer
-            ldx #0              ; If there's a Lake at the new location, the
-            lda (PTR,x)         ;   tornado dissipates over the lake
-            cmp #CHR_LAKE       ;   ,,
-            beq tornado_r       ;   ,,
             dey                 ; Iterate through TornPath damage area
-            bpl loop            ; ,,
+            bne loop            ; ,,
 tornado_r:  ldy #$0a            ; Fade out the volume
 -loop:      sty VOLUME          ; ,,
-            lda #10             ; ,,
-            jsr Delay           ; ,,
             cpy #8              ;   Turn the tornado icon back into the
             bcs dec_vol         ;     burning icon
             lda BurnOrig,y      ;     ,,
             sta Burning,y       ;     ,,
-dec_vol:    dey                 ; Continue fading volume
+dec_vol:    lda #5              ; ,,
+            jsr Delay           ; ,,
+            dey                 ; Continue fading volume
             bpl loop            ; ,,
             lda #0              ; Cut off the tornado noise
             sta NOISE           ; ,,
             lda #$0a            ; Set volume back to default
             sta VOLUME          ; ,,
+            asl TORN_FL         ; Turn Tornado flag off for animations
+            lda #254            ; Restore proper screen color
+            sta SCRCOL          ; ,,
             pla                 ; Get the old coordinates back
             sta COOR_Y          ; ,,
             pla                 ; ,,
             sta COOR_X          ; ,,
             jsr Coor2Ptr        ; ,,
-            asl TORN_FL         ; Turn Tornado flag off for animations
             rts
                                      
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1245,15 +1249,17 @@ out:        sec                 ; Return with carry set (out)
             rts                 ; ,,
             
 ; Randomize Coordinate            
-RandCoor:   jsr Rand31          ; Get location of damage
-            cmp #21             ; ,,
-            bcs RandCoor        ; ,,
-            sta COOR_X          ; ,,
--rnd_y:     jsr Rand31          ; ,,
-            cmp #19             ; ,,
+RandCoor:   jsr Rand31          ; Get random location 0-31
+            cmp #20             ; If it's not a good X coordinate range,
+            bcs RandCoor        ;   get another one
+            sta COOR_X          ; Else, keep it as X
+-rnd_y:     jsr Rand31          ; Do the same with Y
+            cmp #18             ; ,,
             bcs rnd_y           ; ,,
             sta COOR_Y          ; ,,
-            jmp Coor2Ptr        ; Get address of coordinate
+            inc COOR_X          ; Keeping the Coords off the borders, mostly
+            inc COOR_Y          ;   for aesthetic reasons
+            jmp Coor2Ptr
             
 ; Place Character
 ; In A, at PTR location
@@ -1433,21 +1439,11 @@ InitGame:   lda #<Header        ; Show Board Header
             lda StartYear+1     ; ,,
             sta YEAR+1          ; ,,
             ldy LakeCount       ; Add a number of Lakes to the board
--loop:      jsr Rand31          ;   Lakes can't be removed by the player,
-            cmp #20             ;   but they count as Parks when adjacent
-            bcs loop            ;   to a House, without the maintenance
-            sta COOR_X          ;   cost.
--rnd_y:     jsr Rand31          ;   ,,
-            cmp #18             ;   ,,
-            bcs rnd_y           ;   ,,
-            sta COOR_Y          ;   ,,
-            inc COOR_X          ;   Keeping the Lakes off the borders, mostly
-            inc COOR_Y          ;     for aesthetic reasons
-            jsr Coor2Ptr        ;   Place the Lake
-            lda #CHR_LAKE       ;   ,,
-            jsr Place           ;   ,,
-            dey                 ;   ,,
-            bne loop            ;   ,,
+-loop:      jsr RandCoor        ; ,,
+            lda #CHR_LAKE       ; ,,
+            jsr Place           ; ,,
+            dey                 ; ,,
+            bne loop            ; ,,
             lda #10             ; Set initial coordinates
             sta COOR_X          ; ,,
             sta COOR_Y          ; ,,
@@ -1538,7 +1534,7 @@ CarPatt:    .byte 21,2,21,0
 Notes:      .byte 194,197,201,204,207,209,212,214,217,219,221,223,225,194,207
 
 ; Tornado lightning patterns
-TornScr:    .byte 254,14,254,14
+TornScr:    .byte 254,15,255,14
 TornFlash:  .byte 7,4,3,30
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
