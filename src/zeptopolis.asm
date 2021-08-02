@@ -30,6 +30,7 @@ Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$31
 MENU_ITEMS  = 9                 ; Number of actions in menu
 HIGH_ATTR   = %00100000         ; High business attrition
 LOW_ATTR    = %00001000         ; Low business attrition
+TEMPO       = 16                ; Music tempo (jiffies per eighth note)
 
 ; Character Constants
 CHR_CURSOR  = $3f               ; Cursor
@@ -46,6 +47,8 @@ CHR_HOUSE   = $2c               ; House
 CHR_BUS     = $2d               ; Business
 CHR_LAKE    = $2e               ; Lake (obstacle)
 CHR_BURN    = $2f               ; Burned down
+CHR_POP     = $3a               ; Population icon
+CHR_THUMB   = $3c               ; Happiness icon
 
 ; Color Constants
 COL_CURSOR  = 6                 ; Cursor, blue
@@ -122,11 +125,9 @@ P_RAND      = $fd               ; Pseudorandom seed (2 bytes)
 TIME        = $ff               ; Jiffy counter
 
 ; Music Player Memory
-PLAY_FL     = $8b               ; Bit 7 set if player is running
-TR1_COUNT   = $8c               ; Track 1 note length
-TR2_COUNT   = $8d               ; Track 2 note length
-MUSREG      = $8e               ; Music shift register (4 bytes)
-MUS_COUNT   = $92               ; Music countdown
+MUSIC_FL    = $8b               ; Bit 7 set if player is running
+CUR_NOTE    = $8c               ; Current note pointers for 2 tracks (4 bytes)
+COUNTDOWN   = $91               ; Countdown for 2 tracks (2 bytes)
 
 ; Game State
 YEAR        = $1ffa             ; Year (2 bytes)
@@ -175,12 +176,11 @@ Welcome:    jsr Setup           ; Set up hardware and initialize game
 
 Main:       jsr Joystick        ; Wait for joystick movement
             bmi Main            ; ,,
-            bit PLAY_FL         ; Start music when joystick is used
+            bit MUSIC_FL        ; Start music when joystick is used
             bmi ch_joy          ; ,,
-            sec                 ; Set music flag
-            ror PLAY_FL         ; ,,
-            lda #8              ; Set initial tempo
-            sta MUS_COUNT       ; ,,
+            jsr wsReset         ; ,,
+            jsr wsPlay          ; ,,
+            jsr Joystick        ; Get joystick again
 ch_joy:     cpx #FIRE           ; Has fire been pressed?
             beq Action          ; If so, go to Action mode
             txa                 ; Move joystick direction to A and
@@ -212,9 +212,6 @@ new_pos:    jsr DrawCursor      ; Draw the new cursor
 Action:     jsr Joystick        ; Debounce the fire button before entering
             cpx #FIRE           ; ,,
             beq Action          ; ,,
-            lda #%00000001      ; Change the musical theme each turn
-            eor MUSREG          ; ,,
-            sta MUSREG          ; ,,
             sec                 ; Set Action flag
             ror ACTION_FL       ; ,,
             lda UNDER           ; Get character at cursor
@@ -324,10 +321,14 @@ to_main:    jmp Main
 ;   - Handles Wind Farm rotation and fire animation
 ;   - Flashes cursor in Action mode
 ;   - Shakes screen during earthquakes
+;   - Flashes warning icons
 ISR:        inc TIME            ; Circumventing BASIC's clock, so advance it
             bit TORN_FL         ; If tornado in progress, only handle timer
             bmi isr_r           ; ,,
-            jsr Music           ; Service music player
+            ldx #0              ; Service track 0
+            jsr wsService       ; ,,
+            inx                 ; Service track 1
+            jsr wsService       ; ,,
             bit ACTION_FL       ; Flash cursor if in Action mode
             bpl move_wind       ; If not in Action mode, move wind turbines
             ldy #6              ; Default to blue
@@ -337,7 +338,7 @@ ISR:        inc TIME            ; Circumventing BASIC's clock, so advance it
             iny                 ; ,,
 flash_cur:  tya                 ; ,,
             jsr SetColor        ; ,,
-            jmp isr_r
+            jmp icons
 move_wind:  ldx #0
             lda #%00011111      
             bit TIME
@@ -353,7 +354,7 @@ rotate:     ldy #4
             dey
             bpl loop
 svc_quake:  bit QUAKE_FL
-            bpl isr_r
+            bpl icons
 -loop:      lda VICCR4          ; Do wait for raster to be at top, so that
             bne loop            ;   the earthquake isn't all rastery
             lda HORIZ
@@ -361,6 +362,24 @@ svc_quake:  bit QUAKE_FL
             sta HORIZ
             jsr Rand15          ; Randomize volume for rumbling sound
             sta VOLUME          ; ,,
+            jmp isr_r
+icons:      bit TIME            ; Flash icons as warnings that Houses
+            bmi def_icons       ;   Businesses are at risk of leaving.
+            lda BUS_ATTR        ; If the population is insufficient to support
+            cmp #HIGH_ATTR      ;   area business, flash the Population icon
+            bne ch_happy        ;   ,,
+            lda #$21            ;   ,,
+            sta SCREEN+22       ;   ,,
+ch_happy:   lda HAPPY           ; If happiness is below 80%, people are at
+            cmp #"8"            ;   risk of moving out, flash the thumbs
+            bcs isr_r           ;   up icon
+            lda #$21            ;   ,,
+            sta SCREEN+34       ;   ,,
+            bne isr_r
+def_icons:  lda #CHR_POP        ; Flash the default icons back
+            sta SCREEN+22       ; ,,
+            lda #CHR_THUMB      ; ,,
+            sta SCREEN+34       ; ,,
 isr_r:      jmp IRQ             ; Return from interrupt
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -442,8 +461,11 @@ DrawStats:  ldy #1              ; Plot population display
             jsr PRTFIX          ; ,,
             lda #$21            ; Space for population decrease
             jsr CHROUT          ; ,,
+            ldy POP+1           ; If the Population has gone below 256,
+            bne draw_trea       ;   add a second space as a guard against
+            jsr CHROUT          ;   single-turn precipitous drop
             ; TREASURY
-            ldy #7              ; Plot treasury display
+draw_trea:  ldy #7              ; Plot treasury display
             ldx #1              ; ,,
             clc                 ; ,,
             jsr PLOT            ; ,,
@@ -659,7 +681,8 @@ next_adj:   dey                 ; Iterate through entire pattern
             rts
        
 ; Advance to Next Turn            
-NextTurn:   lda UNDER           ; Replace previous character
+NextTurn:   jsr wsStop          ; ,,
+            lda UNDER           ; Replace previous character
             jsr Place           ; ,,
             inc YEAR            ; Increment year
             bne reset_ix        ; ,,
@@ -680,14 +703,27 @@ reset_ix:   lda #0              ; Reset build index
             jsr DrawStats       ; Draw the new stats bar
             jsr DrawBudget      ; Show the previous year's budget
             jsr DrawCursor      ; Put the cursor back
+            lda POP             ; Save population, for restoration after the
+            pha                 ;   business attrition calculation
+            lda POP+1           ;   ,,
+            pha                 ;   ,,
+            lda SMART           ; Education level benefits the player by
+            sec                 ;   making the town look better to businesses.
+            sbc #"0"            ;   The mechanism for this is by raising the
+            jsr AddPop          ;   population for calculation purposes
             ldy #LOW_ATTR       ; Calculate Business Attrition value
             lda BUS_CAP         ; If the annual Business capacity is greater
             cmp POP             ;   than the population, it means that the
             lda BUS_CAP+1       ;   population cannot support Businesses
             sbc POP+1           ;   ,,
+            pla                 ; Restore the previous population level
+            sta POP+1           ; ,,
+            pla                 ; ,,
+            sta POP             ; ,,
             bcc next_r          ; Population is high enough
             ldy #HIGH_ATTR      ; Population is too low
 next_r:     sty BUS_ATTR        ; Set the Business attrition value
+            jsr wsPlay
             jmp Main  
             
 ; Draw Info
@@ -774,7 +810,7 @@ yes_quake:  lda #$ff            ; Turn on earthquake sound
             beq next_dmg        ; ,,
             lda #CHR_BURN       ; Place damage on screen
             jsr Place           ; ,,
-            lda #50             ; Delay during the shaking
+            lda #30             ; Delay during the shaking
             jsr Delay           ; ,,
 next_dmg:   dey                 ; Go back for more destruction!
             bne loop            ; ,,
@@ -1439,7 +1475,7 @@ Setup:      lda #254            ; Set background color
             sta VOICEM          ; ,,
             sta VOICEH          ; ,,
             sta ACTION_FL       ; Clear Action flag
-            sta PLAY_FL         ; Clear Music Play flag
+            sta MUSIC_FL        ; Clear Music Play flag
             lda #$ff            ; Set custom character location
             sta VICCR5          ; ,,
             lda #$7f            ; Set DDR to read East
@@ -1479,6 +1515,7 @@ InitGame:   lda #<Header        ; Show Board Header
             sta SMART_COUNT     ; ,,
             sta TIME            ; Initialize timer
             sta BUS_ATTR        ; Starting Business Attrition value
+            sta TORN_FL         ; Turn off tornado flag
             lda StartTreas      ; Set initial treasury amount
             sta TREASURY        ; ,,
             lda StartTreas+1    ; ,,
@@ -1519,12 +1556,98 @@ NextQuake:  lda YEAR+1          ; Set the year high byte
             inc QUAKE_YR+1
 nxquake_r:  rts
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  
-; MUSIC PLAYER SERVICE
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; Service Music
-Music:      
-music_r:    rts            
+; WAXSCORE IRQ PLAYER
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Reset Score to Start
+wsReset:    lda #<Theme0
+            sta CUR_NOTE
+            lda #>Theme0
+            sta CUR_NOTE+1
+            lda #<Theme1
+            sta CUR_NOTE+2
+            lda #>Theme1
+            sta CUR_NOTE+3
+            ldx #0
+            jsr fetch_note
+            inx
+            jsr fetch_note
+            rts
+
+; Toggle Playing
+wsToggle:   bit MUSIC_FL
+            bmi wsStop
+            ; Fall through to wsPlay
+
+; Begin Playing
+wsPlay:     sec
+            ror MUSIC_FL
+play_r:     rts
+            
+; Stop Playing
+wsStop:     clc
+            ror MUSIC_FL
+            lda #0
+            sta VOICEH
+            sta VOICEM
+            rts
+            
+; Service Routine  
+; X is track number where
+;   0 = Medium Voice
+;   1 = High Voice         
+wsService:  bit MUSIC_FL
+            bpl svc_r
+            dec COUNTDOWN,x
+            beq fetch_note
+            lda COUNTDOWN,x
+            cmp #2
+            bcs keep_on
+            lda #0
+            sta VOICEM
+            sta VOICEH
+keep_on:    rts
+fetch_note: lda #0              ; Initialize countdown
+            sta COUNTDOWN,x     ; ,,
+            ldy #0
+            cpx #0              ; If using track 1, skip
+            bne tk1             ; ,,
+            lda (CUR_NOTE),y    ; Get track 1 note
+            jmp procnote        ;   then process it
+tk1:        lda (CUR_NOTE+2),y  ; Get track 2 note
+procnote:   beq eos             ; End of score
+            pha                 ; Put full note data on stack
+            and #$0f            ; Mask away the duration
+            ;cmp #$0f           ; Effects are unsupported in this player
+            ;beq wsEffect       ; ,,
+            tay                 ; Y is the note index
+            lda Oct0,y          ; Fetch the note
+            sta VOICEM,x        ; Play the note in the appropriate track
+            pla                 ; Get full note data back
+            and #$f0            ; Mask away the note index
+            lsr                 ; Shift the duration to the low nybble
+            lsr                 ; ,,
+            lsr                 ; ,,
+            lsr                 ; ,,
+            tay                 ; Y will be the countdown set index
+-loop:      lda #TEMPO          ; Coundown is TEMPO * duration
+            clc                 ; ,,
+            adc COUNTDOWN,x     ; ,,
+            sta COUNTDOWN,x     ; ,,
+            dey                 ; ,,
+            bne loop            ; ,,
+NextNote:   cpx #0
+            bne adv_tk1
+            inc CUR_NOTE        ; Advance to the next note instruction
+            bne svc_r           ; ,,
+            inc CUR_NOTE+1      ; ,,
+svc_r:      rts
+adv_tk1:    inc CUR_NOTE+2
+            bne svc_r
+            inc CUR_NOTE+3
+            rts
+eos:        jsr wsReset
+            rts       
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; DATA TABLES
@@ -1554,6 +1677,10 @@ Colors:     .byte COL_ROAD,COL_UNOCC,COL_UNOCC,COL_WIND
             .byte COL_SCHOOL,COL_FIRE,COL_CLINIC,COL_PARK
             .byte 0,COL_OCC,COL_OCC,COL_LAKE,COL_BURN   
             
+; Degree to Note Value
+; Determined with electronic tuner
+Oct0:       .byte 0,194,197,201,204,207,209,212,214,217,219,221,223,225
+                        
 ; Adjacent structure bit numbers
 ; Wind Farm = Bit 0
 ; School    = Bit 1
@@ -1587,6 +1714,64 @@ TornScr:    .byte 254,15,255,14
 TornFlash:  .byte 7,4,3,30
 TornThun:   .byte $ff,$ff,$ed,$f0
 
+Theme0:     .byte $41,$48
+            .byte $43,$4c
+            .byte $4b,$43
+            .byte $4a,$4a
+            .byte $48,$4d
+            .byte $43,$4c
+            .byte $41,$43
+            .byte $45,$43
+            
+            .byte $21,$25,$28,$25
+            .byte $23,$28,$2c,$28
+            .byte $2b,$26,$23,$2b
+            .byte $2a,$26,$2a,$29
+            .byte $28,$21,$2d,$28
+            .byte $23,$28,$2c,$28
+            .byte $41,$45
+            .byte $45,$46
+            
+            .byte $41,$45
+            .byte $45,$46
+            
+            .byte $21,$25,$28,$25
+            .byte $23,$28,$2c,$28
+            .byte $2b,$26,$23,$2b
+            .byte $2a,$26,$2a,$29
+            .byte $28,$21,$2d,$28
+            .byte $23,$28,$2c,$28
+            .byte $41,$45,$00
+
+Theme1:     .byte $45,$15,$16,$15,$13
+            .byte $43,$28,$2a
+            .byte $4b,$1b,$1d,$1b,$1a
+            .byte $2a,$26,$2a,$29
+            .byte $48,$15,$16,$15,$13
+            .byte $23,$28,$28,$23
+            .byte $41,$11,$13,$25
+            .byte $25,$63
+            
+            .byte $25,$21,$15,$16,$15,$13
+            .byte $23,$28,$28,$2a
+            .byte $2b,$26,$1b,$1d,$1b,$1a
+            .byte $2a,$26,$2a,$29
+            .byte $48,$15,$16,$15,$13
+            .byte $23,$28,$28,$23
+            .byte $41,$11,$13,$25
+            .byte $25,$63
+            
+            .byte $41,$11,$13,$25
+            .byte $25,$25,$46
+            
+            .byte $11,$25,$28,$25
+            .byte $23,$28,$2c,$28
+            .byte $2b,$26,$23,$2b
+            .byte $2a,$26,$2a,$29
+            .byte $28,$21,$2d,$28
+            .byte $23,$28,$2c,$28
+            .byte $41,$55,$00
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; MODPACK TABLES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1595,12 +1780,9 @@ TornThun:   .byte $ff,$ff,$ed,$f0
 ; and load with LOAD"MODPACK",8,1
 MODPACK:
 
+; Starting Values
 StartYear:  .word 2021
-
-; Starting Treasury
 StartTreas: .word 500
-
-; Number of Lakes
 LakeCount:  .byte 6
 
 ; Build costs
@@ -1638,7 +1820,7 @@ QuakePower: .byte 12
 ; be a tornado.
 ; TornPath determines the maximum path length
 ; The default is a 1 in 16 chance per year, with a maximum path length of 6
-TornFreq:   .byte %00010000
+TornFreq:   .byte %00100000
 TornPath:   .byte 6
 
 
