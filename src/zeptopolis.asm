@@ -275,9 +275,9 @@ Build:      jsr Joystick        ; Debounce joystick for build
             lda BUILD_IX        ; Get the built structure
             beq cancel          ;
             cmp #MENU_ITEMS-1   ; Has the turn been ended?
-            bne item            ; ,,
+            bne ch_dup          ; ,,
             jmp NextTurn        ; ,,
-item:       clc                 ; If the built character is the same as the
+ch_dup:     clc                 ; If the built character is the same as the
             adc #CHR_CANCEL     ;   one already here, then cancel the
             cmp UNDER           ;   build, to save the money
             beq cancel          ;   ,,
@@ -386,17 +386,18 @@ Spend:      sta TMP
             inc YR_EXPEND+1     ; ,,
 ch_afford:  ldy TREASURY+1      ; If high byte of Treasury is non-zero, then of
             bne subtract        ;   course the item is affordable
-            cmp TREASURY        ; If the amount in the Treasury is less than
-            beq subtract        ;   required amount
-            bcs spend_rs        ;   fail with carry set
-subtract:   lda TREASURY        ; ,,
+            lda TMP             ; If the amount in the Treasury is less than 
+            cmp TREASURY        ;   the available amount, return with carry set
+            beq subtract        ;   ,,
+            bcs spend_err       ;   ,,
+subtract:   lda TREASURY        ; Spend the amount
             sec                 ; ,,
             sbc TMP             ; ,,
             sta TREASURY        ; ,,
-            bcs spend_r         ; ,,
+            bcs spend_ok        ; ,,
             dec TREASURY+1      ; ,,
-spend_r:    clc                 ; Succeed with carry clear
-spend_rs:   rts 
+spend_ok:   clc                 ; Succeed with carry clear
+spend_err:  rts
             
 ; Revenue to Budget
 ; In VALUE
