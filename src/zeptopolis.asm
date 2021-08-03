@@ -1585,14 +1585,14 @@ musicsh:    asl MUSIC_REG       ; Shift 32-bit register left
             sta MUSIC_REG       ; ,,
             dec MUSIC_MOVER     ; When this counter hits 0, alter the music
             bne FetchNote       ;   by flipping bit 0 of each byte in the
-            ldy #2              ;   shift register
+            ldy #3              ;   shift register
 -loop:      lda MUSIC_REG,y     ;   ,,
             eor #$01            ;   ,,
             sta MUSIC_REG,y     ;   ,,
             dey                 ;   ,,
             bpl loop            ;   ,,
             lda MUSIC_REG+2
-            and #%01111111
+            lsr
             ora #%00000001
             sta MUSIC_MOVER     ; 
 FetchNote:  lda #10             ; Reset the timer
@@ -1671,14 +1671,6 @@ Colors:     .byte COL_ROAD,COL_UNOCC,COL_UNOCC,COL_WIND
             .byte COL_SCHOOL,COL_FIRE,COL_CLINIC,COL_PARK
             .byte 0,COL_OCC,COL_OCC,COL_LAKE,COL_BURN   
      
-; Musical Mode
-; Dorian         
-Mode:       .byte 147,159,163,175,183,191,195,201         
-
-; Musical Theme
-Theme:      .byte $55,$aa,$55,$ab
-            ;.byte $83,$24,$99,$73            
-
 ; Adjacent structure bit numbers
 ; Wind Farm = Bit 0
 ; School    = Bit 1
@@ -1718,15 +1710,22 @@ TornThun:   .byte $ff,$ff,$f4,$f6,$f6,$f4,$f2,$f0
             .asc "/4.0/legalcode.txt",$00
             
 ;Bugfix Bytes
-            .asc $00,$00,$00,$00,$00,$00
+            .asc $00,$00,$00,$00,$00,$00,$00
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; MODPACK TABLES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; The following tables can be used to modify the behavior of the game, to make
-; game balance harder or easier. Save a set of 45 bytes to the MODPACK address,
+; game balance harder or easier. Save a set of 57 bytes to the MODPACK address,
 ; and load with LOAD"MODPACK",8,1
 MODPACK:
+
+; Musical Mode
+; Dorian         
+Mode:       .byte 147,159,163,175,183,191,195,201         
+
+; Musical Theme
+Theme:      .byte $55,$aa,$55,$ab
 
 ; Starting conditions
 StartYear:  .word 2021
