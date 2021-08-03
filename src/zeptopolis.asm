@@ -32,6 +32,7 @@ HIGH_ATTR   = %00100000         ; High business attrition
 LOW_ATTR    = %00001000         ; Low business attrition
 
 ; Character Constants
+CHR_PROG    = $f8               ; Progress Bar
 CHR_CURSOR  = $3f               ; Cursor
 CHR_CANCEL  = $22               ; Action Cancel
 CHR_ROAD    = $23               ; Road Placeholder
@@ -89,7 +90,7 @@ MISR_FL     = $05               ; Minimum ISR Flag (only timer and music)
 PREV_X      = $08               ; Previous x coordinate
 PREV_Y      = $09               ; Previous y coordinate
 BUILD_IX    = $0a               ; Build index
-ITERATOR    = $0b               ; Local iterator
+PROGRESS    = $0b               ; Progress Bar
 HAPPY       = $0c               ; Satisfaction (10% - 90%)
 BUILD_MASK  = $a0               ; Build mask (for wind farms)
 ACTION_FL   = $a1               ; Action flag
@@ -136,8 +137,8 @@ QUAKE_YR    = $1ffe             ; Year of next earthquake (2 bytes)
 
 ; System Resources - Memory
 CINV        = $0314             ; ISR vector
-;NMINV       = $0318             ; Release NMI vector
--NMINV     = $fffe             ; Development NMI non-vector (uncomment for dev)
+NMINV       = $0318             ; Release NMI vector
+;-NMINV     = $fffe             ; Development NMI non-vector (uncomment for dev)
 SCREEN      = $1e00             ; Screen character memory (unexpanded)
 BOARD       = SCREEN+66         ; Starting address of board
 COLOR       = $9600             ; Screen color memory (unexpanded)
@@ -365,7 +366,7 @@ icons:      bit TIME            ; Flash icons as warnings that Houses
             lda #$21            ;   ,,
             sta SCREEN+22       ;   ,,
 ch_happy:   lda HAPPY           ; If happiness is below 80%, people are at
-            cmp #"8"            ;   risk of moving out, flash the thumbs
+            cmp #"7"            ;   risk of moving out, flash the thumbs
             bcs isr_r           ;   up icon
             lda #$21            ;   ,,
             sta SCREEN+34       ;   ,,
@@ -841,7 +842,7 @@ yes_tor:    jsr MusicStop       ; ,,
             beq tornado_r       ;   ,,
             lda #CHR_BURN       ; Place the damage on the screen
             jsr Place           ; ,,
-            ldx #3              ; Flash some lightning
+            ldx #7              ; Flash some lightning
 flashes:    lda VICCR4          ;     (Wait for raster to get to 0 before
             bne flashes         ;       changing screen color)
             lda TornScr,x       ;   Lightning
@@ -912,8 +913,12 @@ Upkeep:     jsr ClrStatus       ; Clear status bar
             lda COOR_Y          ; ,,
             pha                 ; ,,
             lda #$00            ; Start at the top left corner of the board
-            sta COOR_X          ; ,,
             sta COOR_Y          ; ,,
+            sta PROGRESS        ; Reset Progress Bar
+rand_x:     jsr Rand31          ; Get random location 0-31
+            cmp #20             ; If it's not a good X coordinate range,
+            bcs rand_x          ;   get another one
+            sta COOR_X          ;   ,,
 -loop:      jsr Coor2Ptr        ; Get the character at the pointer
             ldx #$00            ; ,,
             lda (PTR,x)         ; ,,          
@@ -945,14 +950,21 @@ next_map:   inc COOR_Y
             lda #0
             sta COOR_Y
             inc COOR_X
-            ldy COOR_X
-            lda #$f8            ; Progress bar
+            inc PROGRESS        ; Advance Progress Bar and draw it
+            ldy PROGRESS        ; ,,
+            lda #CHR_PROG       ; ,, Progress bar character
             sta SCREEN+43,y     ; ,,
             lda #4              ; ,, (Slight delay for progress)
             jsr Delay           ; ,,
-            cpy #22             ; Iterate through all X coordinates
-            bne loop            ; ,,
-            jsr ClrStatus       ; Clear status bar
+            cpy #22             ; If 22 columns have been done,
+            beq upkeep_r        ;   upkeep is done
+            lda COOR_X          ; Check X for bounds
+            cmp #22             ; If X reached the right edge, loop back
+            bne loop            ;   to 0
+            lda #0              ;   ,,
+            sta COOR_X          ;   ,,
+            beq loop
+upkeep_r:   jsr ClrStatus       ; Clear status bar
             jmp ResetCoor       ; Reset coordinates
 
 ; Maintenance
@@ -1022,14 +1034,14 @@ CompHouse:  jsr Nearby          ; Get nearby structures
             lda #BIT_WIND       ; Is there a Wind Farm nearby?
             bit NEARBY_ST       ; ,,
             bne ch_hfire        ; If so, go to next check
-            jsr Rand7           ; If not, there's a 1 in 8 chance that
+            jsr Rand3           ; If not, there's a 1 in 4 chance that
             bne ch_hfire        ;   occupants move out
             lda #CHR_UHOUSE     ; Otherwise, they move out
             jmp Place           ; ,,
 ch_hfire:   jsr FireRisk        ; Handle fire risk
             bcs comph_r         ; ,,
 ch_emp:     lda HAPPY           ; If employment is less than 80%         
-            cmp #"8"            ;   there's a 1 in 8 chance that the
+            cmp #"7"            ;   there's a 1 in 8 chance that the
             bcs ch_hclinic      ;   occupants will move out
             jsr Rand7           ;   ,,
             bne ch_hclinic      ;   ,,
@@ -1038,8 +1050,8 @@ ch_emp:     lda HAPPY           ; If employment is less than 80%
 ch_hclinic: lda #BIT_CLINIC     ; Is there a Clinic nearby?
             bit NEARBY_ST       ; ,,
             beq ch_hschool      ; ,,
-            lda #2              ; A nearby Clinic adds to 2 population
-            jsr AddPop          ; ,,
+            lda #1              ; A nearby Clinic adds to 1 a House's
+            jsr AddPop          ;   population
 ch_hschool: lda #BIT_SCHOOL     ; Is there a School nearby?
             bit NEARBY_ST       ; ,,
             beq hrevenue        ; ,,           
@@ -1072,7 +1084,12 @@ bus_near:   jsr Nearby          ; Get nearby structures
             lda #CHR_UBUS       ;   ,,
             jmp Place           ;   ,,
 ch_bfire:   jsr FireRisk        ; Handle fire risk
-            bcc compbus_r       ; ,,
+            bcs compbus_r       ; ,,
+ch_broad:   lda #BIT_ROAD       ; Does the Business still have an
+            bit ADJ_ST          ;   adjacent road?
+            bne brevenue        ;   ,,
+            lda #CHR_UBUS       ; If not, the Business always moves out
+            jmp Place           ;   ,,
 brevenue:   lda #CHR_BUS        ; Assess Business property value
             jsr Assess          ; ,,
             jsr Revenue         ; Add property value to Treasury
@@ -1106,7 +1123,7 @@ fire_r:     clc
 ; Store result in VALUE
 ; This assumes that Nearby has already been called so that NEARBY_ST and ADJ_ST
 ; are set correctly.
-Assess:     ldy #1              ; Set inherent value
+Assess:     ldy #0              ; Initialize value
             sty VALUE           ; ,,
             ldy #<BusVals       ; Set assessment table
             sty TMP_PTR         ; ,,
@@ -1139,7 +1156,11 @@ AssessLkup: ldy #6              ; Look up structures in the
             sta VALUE           ;   ,,
 assess_nx:  dey                 ;   ,,
             bpl loop            ;   ,,
-            rts
+            lda VALUE           ; Prevent value from going negative
+            bpl assess_r        ; ,,
+            lda #0              ; ,,
+            sta VALUE           ; ,,
+assess_r:   rts
 
 ; Fires Out
 ; Converts MOST fires (75%) to spaces            
@@ -1550,8 +1571,9 @@ MusicServ:  bit MUSIC_FL        ; Skip if play flag is off
             bpl music_r         ;   ,,
             dec MUSIC_TIMER     ; Fetch new note when timer hits 0
             bmi musicsh
-            lda MUSIC_TIMER
-            sta VOLUME
+            lda VOLUME          ; Reduce volume, but not past 0
+            beq music_r         ; ,,
+            dec VOLUME          ; ,,
             rts
 musicsh:    asl MUSIC_REG       ; Shift 32-bit register left
             rol MUSIC_REG+1     ; ,,
@@ -1562,39 +1584,37 @@ musicsh:    asl MUSIC_REG       ; Shift 32-bit register left
             ora MUSIC_REG       ; And put that back at the beginning
             sta MUSIC_REG       ; ,,
             dec MUSIC_MOVER     ; When this counter hits 0, alter the music
-            bne FetchNote       ;   by flipping bit 0 of byte 0, and
-            lda MUSIC_REG       ;   bit 7 of byte 2
+            bne FetchNote       ;   by flipping bit 0 of each byte in the
+            ldy #2              ;   shift register
+-loop:      lda MUSIC_REG,y     ;   ,,
             eor #$01            ;   ,,
-            sta MUSIC_REG       ;   ,,
-            lda MUSIC_REG+2     ;   ,,
-            eor #$80            ;   ,,
-            sta MUSIC_REG+2     ;   ,,
-            lda #$f8            ; Reset to non-0 so that the cycle happens
-            sta MUSIC_MOVER     ;   over a wider number of changes
+            sta MUSIC_REG,y     ;   ,,
+            dey                 ;   ,,
+            bpl loop            ;   ,,
+            lda MUSIC_REG+2
+            and #%01111111
+            ora #%00000001
+            sta MUSIC_MOVER     ; 
 FetchNote:  lda #10             ; Reset the timer
             sta MUSIC_TIMER     ; ,,
-            bit MUSIC_REG
-            bpl play_high
-            lda #0
-            sta VOICEH
-            beq check_low
-play_high:  lda MUSIC_REG+1     ; Get the note
+            bit MUSIC_REG       ; A high note played when bit 7 of byte 0 is
+            bpl play_high       ;   cleear
+            lda #0              ; Otherwise, silence the high voice 
+            sta VOICEH          ; ,,
+            beq play_low        ; 
+play_high:  lda MUSIC_REG+1     ; Get the mid note
             and #%00001110      ; Mask the low three bits and shift, then
             lsr                 ;   transfer the bits to
             tay                 ;   Y to be the mode degree index
             lda Mode,y          ; Get the modal note
             sta VOICEH          ; Put it in the sound register
-check_low:  bit MUSIC_REG+3     ; When bit 7 of byte 3 is set, then play
-            bpl play_low        ;   the middle register
-            lda #0
-            sta VOICEL
-            beq set_vol
-play_low:   lda MUSIC_REG+1     ;   ,,
-            and #%00000111      ;   One bit behind
+play_low:   lda MUSIC_REG+1     ; Play the middle register, same byte as the
+            and #%00000111      ;   hight, but one bit behind
             tay                 ; Y is the mode degree index
             lda Mode,y          ; ,,
             sta VOICEM          ; Set mid voice
-set_vol:    lda #10
+set_vol:    lda MUSIC_REG+3
+            and #$0f
             sta VOLUME
 music_r:    rts
 
@@ -1656,7 +1676,8 @@ Colors:     .byte COL_ROAD,COL_UNOCC,COL_UNOCC,COL_WIND
 Mode:       .byte 147,159,163,175,183,191,195,201         
 
 ; Musical Theme
-Theme:      .byte $83,$24,$99,$73            
+Theme:      .byte $55,$aa,$55,$ab
+            ;.byte $83,$24,$99,$73            
 
 ; Adjacent structure bit numbers
 ; Wind Farm = Bit 0
@@ -1682,20 +1703,28 @@ PowersOf2:  .byte 1,2,4,8,16,32,64,128
 ; Search pattern for adjacent search, starting from index 3 (PTR minus 22)
 CarPatt:    .byte 21,2,21,0
 
-; Degree to Note Value
-; Determined with electronic tuner
-Notes:      .byte 194,197,201,204,207,209,212,214,217,219,221,223,225,194,207
-
 ; Tornado thunder and lightning patterns
-TornScr:    .byte 254,15,255,14
-TornFlash:  .byte 7,4,3,30
-TornThun:   .byte $ff,$ff,$ed,$f0
+TornScr:    .byte 254, 15,255, 14,254, 14, 15, 14
+TornFlash:  .byte 20,   2,  2,  9,  3,  6,  8, 10
+TornThun:   .byte $ff,$ff,$f4,$f6,$f6,$f4,$f2,$f0
+
+; License
+            .asc "THIS SOFTWARE IS RELEASED UNDER THE",$0d
+            .asc "CREATIVE COMMONS ATTRIBUTION-NONCOMMERCIAL",$0d
+            .asc "4.0 INTERNATIONAL LICENSE.",$0d
+            .asc "THE LICENSE SHOULD BE INCLUDED.",$0d
+            .asc "IF NOT, PLEASE SEE:",$0d
+            .asc "https://creativecommons.org/licenses/by-nc"
+            .asc "/4.0/legalcode.txt",$00
+            
+;Bugfix Bytes
+            .asc $00,$00,$00,$00,$00,$00
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; MODPACK TABLES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; The following tables can be used to modify the behavior of the game, to make
-; game balance harder or easier. Save a set of 47 bytes to the MODPACK address,
+; game balance harder or easier. Save a set of 45 bytes to the MODPACK address,
 ; and load with LOAD"MODPACK",8,1
 MODPACK:
 
@@ -1710,16 +1739,17 @@ UpdateCost: .byte 10
 
 ; Yearly maintenance costs of maintainable structures
 ;                 Wind Farm,School, Firehouse, Clinic, Park
-MaintCosts: .byte 5,        15,     10,        10,     2
+MaintCosts: .byte 5,        15,     10,        10,     3
 
-; Assessed values for nearby structures  
-; See structure number in BitChr
-BusVals:    .byte 0,0,2,0,0,1,0
-HouseVals:  .byte 0,3,0,2,0,0,1
+; Assessed values for NEARBY structures ($ff = -1)
+;                 Wind Farm, School, Firehouse, Clinic, Park, House, Business
+BusVals:    .byte 0,         0,      2,         0,      0,    2,     0
+HouseVals:  .byte 0,         3,      0,         2,      0,    0,     2
 
-; Assessed values for cardinally-adjacent structures
-BusAVals:   .byte $ff,0,0,0,0,2,1
-HouseAVals: .byte 0,0,0,0,2,$ff,0
+; Assessed values for ADJACENT structures ($ff = -1)
+;                 Wind Farm, School, Firehouse, Clinic, Park, House, Business
+BusAVals:   .byte $ff,       0,      0,         0,      2,    1,     2
+HouseAVals: .byte $ff,       0,      $ff,       $ff,    2,    $ff,   $ff
 
 ; Earthquake frequency
 ; The next earthquake will happen QuakeFreq years from now, plus rand(QuakMarg) 
@@ -1751,12 +1781,13 @@ TornPath:   .byte 6
 ; a reliable method as long as you don't add anything AFTER this
 ; character data.
 ;
-; Roads $00 - $0f
 ; (The following lines generate padding for XA)
 pre_charset:
 * = $1c00
 .dsb (*-pre_charset)
 * = $1c00
+
+; Roads $00 - $0f
 CharSet:    .byte $00,$aa,$aa,$aa,$00,$aa,$aa,$aa  ; 0000 Parking Lot 
             .byte $54,$54,$44,$54,$54,$44,$7c,$00  ; 0001 N			  
             .byte $00,$00,$7f,$40,$4c,$40,$7f,$00  ; 0010 E			        
