@@ -71,7 +71,7 @@ BIT_CLINIC  = %00001000
 BIT_PARK    = %00010000
 BIT_HOUSE   = %00100000
 BIT_BUS     = %01000000
-BIT_BURN    = %10000000
+BIT_ROAD    = %10000000
 
 ; Directional Constants
 NORTH       = 0
@@ -85,7 +85,7 @@ UNDER       = $00               ; Character under pointer
 TMP         = $01               ; Subroutine temporary storage
 TMP_PTR     = $02               ; Temporary pointer (2 bytes)
 CURR_ST     = $04               ; Current structure list (nearby or adjacent)
-TORN_FL     = $05               ; Tornado flag
+MISR_FL     = $05               ; Minimum ISR Flag (only timer and music)
 PREV_X      = $08               ; Previous x coordinate
 PREV_Y      = $09               ; Previous y coordinate
 BUILD_IX    = $0a               ; Build index
@@ -176,10 +176,6 @@ Welcome:    jsr Setup           ; Set up hardware and initialize game
 
 Main:       jsr Joystick        ; Wait for joystick movement
             bmi Main            ; ,,
-            bit MUSIC_FL        ; Start music when joystick is used
-            bmi ch_joy          ; ,,
-            jsr MusicInit       ; ,,
-            jsr Joystick        ; Get joystick again, which is likely the same
 ch_joy:     cpx #FIRE           ; Has fire been pressed?
             beq Action          ; If so, go to Action mode
             txa                 ; Move joystick direction to A and
@@ -208,9 +204,12 @@ new_pos:    jsr DrawCursor      ; Draw the new cursor
 ;   - Build
 ;   - Cancel
 ;   - Finish turn            
-Action:     jsr Joystick        ; Debounce the fire button before entering
+Action:     bit MUSIC_FL        ; Start music on first action
+            bmi a_debounce      ; ,,
+            jsr MusicInit       ; ,,
+a_debounce: jsr Joystick        ; Debounce the fire button before entering
             cpx #FIRE           ; ,,
-            beq Action          ; ,,
+            beq a_debounce      ; ,,
             sec                 ; Set Action flag
             ror ACTION_FL       ; ,,
             lda UNDER           ; Get character at cursor
@@ -321,9 +320,9 @@ to_main:    jmp Main
 ;   - Flashes cursor in Action mode
 ;   - Shakes screen during earthquakes
 ISR:        inc TIME            ; Circumventing BASIC's clock, so advance it
-            bit TORN_FL         ; If tornado in progress, only handle timer
-            bmi isr_r           ; ,,
             jsr MusicServ       ; Service music player
+            bit MISR_FL         ; Min-ISR, Handle only timer and music
+            bmi isr_r           ;   ,,
             bit ACTION_FL       ; Flash cursor if in Action mode
             bpl move_wind       ; If not in Action mode, move wind turbines
             ldy #6              ; Default to blue
@@ -547,12 +546,7 @@ next_cell:  inc COOR_Y          ; Continue iterating across all characters in
             lda COOR_X          ;   ,,
             cmp #22             ;   ,,
             bne loop            ;   ,,
-            pla                 ; Restore cursor coordinates
-            sta COOR_Y          ; ,,
-            pla                 ; ,,
-            sta COOR_X          ; ,,
-            jsr Coor2Ptr        ; Restore coordinate pointer
-            rts                 ; ,,
+            jmp ResetCoor       ; Reset coordinates
             
 ; Check Road
 ; Carry is clear if the specified adjacent cell is a road
@@ -658,13 +652,17 @@ search:     ldy #3              ; The AdjPatt table adds numbers of cells
             inc PTR+1           ;   ,,
 lookup_val: ldx #0              ; Get character at pointer position
             lda (PTR,x)         ; ,,
-            cmp #CHR_ROAD       ; Range-check character at location
+            cmp #$10            ; If this is a road, store it at bit 7
+            bcs adj_range       ;   ,,
+            lda #BIT_ROAD       ;   ,,
+            bne add_adj         ;   ,,
+adj_range:  cmp #CHR_ROAD       ; Range checking for characters
             bcc next_adj        ; ,,
-            cmp #CHR_BURN+1     ; ,,
+            cmp #CHR_BURN       ; ,,
             bcs next_adj        ; ,,
             tax                 ; Look up the value in the table
             lda AdjValues-$23,x ; ,,
-            ora ADJ_ST          ; Add the value to the adjacent bitfield
+add_adj:    ora ADJ_ST          ; Add the value to the adjacent bitfield
             sta ADJ_ST          ; ,,
 next_adj:   dey                 ; Iterate through entire pattern
             bpl loop            ; ,,
@@ -702,7 +700,7 @@ reset_ix:   lda #0              ; Reset build index
             bcc next_r          ; Population is high enough
             ldy #HIGH_ATTR      ; Population is too low
 next_r:     sty BUS_ATTR        ; Set the Business attrition value
-            jsr MusicPlay
+            jsr MusicPlay       ; Music may have stopped during a disaster
             jmp Main  
             
 ; Draw Info
@@ -734,7 +732,8 @@ u10:        clc                 ; ,,
             tax                 ; ,,
             lda #0              ; ,,
             jmp PRTFIX          ; ,,
-struct:     sei                 ; Stop interrupts to prevent cursor flash
+struct:     sec                 ; Set ISR to minimum, so that
+            ror MISR_FL         ;   cursor flashes don't cause problems
             jsr Nearby          ;   during the Nearby routine
             sta TMP             ; Use TMP for structure list
             ldy #0              ; Y is the bit index
@@ -761,7 +760,7 @@ show_val:   jsr Assess
             clc
             adc #$30            ; Convert value into a numeral
             sta SCREEN+65     
-struct_r:   cli
+struct_r:   lsr MISR_FL         ; Turn off Min-ISR flag
             rts 
       
 ; Handle Earthquake Disaster            
@@ -799,14 +798,11 @@ next_dmg:   dey                 ; Go back for more destruction!
             lda ORIG_HORIZ      ; Restore the original horiz position
             sta HORIZ           ; ,,
             cli
-            pla                 ; Restore coordinates
-            sta COOR_Y          ; ,,
-            pla                 ; ,,
-            sta COOR_X          ; ,,
             lda #0              ; Turn off the earthquake sound
             sta NOISE           ; ,,
             sta VOICEL          ; ,,
-            jmp NextQuake       ; Set the date of the next disaster    
+            jsr NextQuake       ; Set the date of the next disaster  
+            jmp ResetCoor       ; Reset the coordinates  
 
 ; Handle Tornado Disaster            
 Tornado:    lda TornFreq        ; Get frequency of tornado in power of two
@@ -821,8 +817,8 @@ yes_tor:    jsr MusicStop       ; ,,
             lda #14             ; Change screen to dark and foreboding
             sta SCRCOL          ; ,,
             jsr FiresOut        ; Clear most of the remaining fires
-            sec                 ; Turn on tornado flag to disable fire animation
-            ror TORN_FL         ; ,,
+            sec                 ; Turn on Min-ISR flag to disable fire animation
+            ror MISR_FL         ; ,,
             ldy #7              ; Temporarily replace the burning icon with
 -loop:      lda TornIcon,y      ;   the tornado icon
             sta Burning,y       ;   ,,
@@ -883,15 +879,10 @@ dec_vol:    lda #5              ; ,,
             bpl loop            ; ,,
             lda #0              ; Cut off the tornado noise
             sta NOISE           ; ,,
-            lsr TORN_FL         ; Turn Tornado flag off for animations
+            lsr MISR_FL         ; Turn Min-ISR flag off for animations
             lda #254            ; Restore proper screen color
             sta SCRCOL          ; ,,
-            pla                 ; Get the old coordinates back
-            sta COOR_Y          ; ,,
-            pla                 ; ,,
-            sta COOR_X          ; ,,
-            jsr Coor2Ptr        ; ,,
-            rts
+            jmp ResetCoor       ; Reset coordinates
                                      
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; UPKEEP ROUTINES
@@ -961,16 +952,8 @@ next_map:   inc COOR_Y
             jsr Delay           ; ,,
             cpy #22             ; Iterate through all X coordinates
             bne loop            ; ,,
-            pla                 ; Restore the coordinates to pre-upkeep
-            sta COOR_Y          ;   location
-            pla                 ;   ,,
-            sta COOR_X          ;   ,,
-ClrStatus:  ldy #21
-            lda #$20
--loop:      sta SCREEN+44,y     ; Clear status bar
-            dey
-            bpl loop
-            rts
+            jsr ClrStatus       ; Clear status bar
+            jmp ResetCoor       ; Reset coordinates
 
 ; Maintenance
 Maint:      sec                 ; Convert character to index
@@ -1013,11 +996,14 @@ SellBus:    lda SOLD_BUSES      ; If a business was sold this turn, return
             cmp #HIGH_ATTR      ;   the Business will not sell
             beq sellb_r         ;   ,,
             jsr Nearby          ; A business must have a nearby Wind Farm
-            tax                 ; ,,
-            and #BIT_WIND       ; ,,
-            beq sellb_r         ; ,,
-            txa                 ; If it clears the power hurdle, it can sell
-            and #BIT_HOUSE      ;   by either (1) being nearby an occupied
+            lda #BIT_WIND       ;   to sell
+            bit NEARBY_ST       ;   ,,
+            beq sellb_r         ;   ,,
+            lda #BIT_ROAD       ; A business must have an adjacent Road
+            bit ADJ_ST          ;   to sell
+            beq sellb_r         ;   ,,
+            lda #BIT_HOUSE      ; If these hurdles are cleared, it will sell
+            bit NEARBY_ST       ;   by either (1) being nearby an occupied
             bne sold_bus        ;   House, or
             jsr Adjacents       ;   (2) being adjacent to another occupied
             and #BIT_BUS        ;   Business
@@ -1040,13 +1026,8 @@ CompHouse:  jsr Nearby          ; Get nearby structures
             bne ch_hfire        ;   occupants move out
             lda #CHR_UHOUSE     ; Otherwise, they move out
             jmp Place           ; ,,
-ch_hfire:   lda #BIT_FIRE       ; Is there a Firehouse nearby?
-            bit NEARBY_ST       ; ,,
-            bne ch_emp          ; If so, house is safe from fire
-            jsr Rand15          ; 1 in 16 chance of fire
-            bne ch_emp          ; ,,
-            lda #CHR_BURN       ; Burn the house down
-            jmp Place
+ch_hfire:   jsr FireRisk        ; Handle fire risk
+            bcs comph_r         ; ,,
 ch_emp:     lda HAPPY           ; If employment is less than 80%         
             cmp #"8"            ;   there's a 1 in 8 chance that the
             bcs ch_hclinic      ;   occupants will move out
@@ -1070,8 +1051,8 @@ populate:   jsr Rand3           ; Add people to each house (3-6)
             clc                 ; ,,
             adc #3              ; ,,
             jsr AddPop          ; ,,
-comph_r:    inc HOUSE_COUNT     ; Count Houses
-            rts
+            inc HOUSE_COUNT     ; Count Houses
+comph_r:    rts
 
 ; Compute Business 
 ; - Determine whether the Business leaves or stays
@@ -1090,13 +1071,8 @@ bus_near:   jsr Nearby          ; Get nearby structures
             bne ch_bfire        ;   the Business moves out
             lda #CHR_UBUS       ;   ,,
             jmp Place           ;   ,,
-ch_bfire:   lda #BIT_FIRE       ; Is there a Firehouse nearby?
-            bit NEARBY_ST       ; ,,
-            bne brevenue        ; If so, business is safe from fire
-            jsr Rand15          ; 1 in 16 chance of fire
-            bne brevenue        ; ,,
-            lda #CHR_BURN       ; Burn the business down
-            jmp Place           ; ,,
+ch_bfire:   jsr FireRisk        ; Handle fire risk
+            bcc compbus_r       ; ,,
 brevenue:   lda #CHR_BUS        ; Assess Business property value
             jsr Assess          ; ,,
             jsr Revenue         ; Add property value to Treasury
@@ -1107,14 +1083,30 @@ brevenue:   lda #CHR_BUS        ; Assess Business property value
             sta BUS_CAP         ;   ,,
             bcc compbus_r       ;   ,,
             inc BUS_CAP+1       ;   ,,
-compbus_r:  rts           
+compbus_r:  rts  
+
+; Handle Fire Risk
+; For Houses and Businesses, the same
+; Assumes Coordinate and NEARBY_ST are set
+; Carry is set if the structure has been destroyed by fire
+FireRisk:   lda #BIT_FIRE
+            bit NEARBY_ST
+            bne fire_r
+            jsr Rand15
+            bne fire_r
+            lda #CHR_BURN
+            jsr Place
+            sec
+            rts
+fire_r:     clc
+            rts            
             
 ; Assess House or Business Value
 ; A is CHR_HOUSE or CHR_BUS
 ; Store result in VALUE
 ; This assumes that Nearby has already been called so that NEARBY_ST and ADJ_ST
 ; are set correctly.
-Assess:     ldy InValBus        ; Initialize property values (for business)
+Assess:     ldy #1              ; Set inherent value
             sty VALUE           ; ,,
             ldy #<BusVals       ; Set assessment table
             sty TMP_PTR         ; ,,
@@ -1122,8 +1114,6 @@ Assess:     ldy InValBus        ; Initialize property values (for business)
             sty TMP_PTR+1       ; ,,
             cmp #CHR_HOUSE      ; ,,
             bne assess_st       ; ,,
-            lda InValHouse      ; Override property value initialization
-            sta VALUE           ; ,,
             ldy #<HouseVals     ; Override assessment table
             sty TMP_PTR         ; ,,
             ldy #>HouseVals     ; ,,
@@ -1180,11 +1170,7 @@ no_fire:    inc COOR_X
             lda #0
             sta COOR_X
             beq loop
-f_out_r:    pla
-            sta COOR_Y
-            pla
-            sta COOR_X
-            rts            
+f_out_r:    jmp ResetCoor            
             
 ; Add Population
 ; In A
@@ -1207,6 +1193,14 @@ Delay:      clc
             bne loop
             rts 
             
+; Clear Status Bar            
+ClrStatus:  ldy #21
+            lda #$20
+-loop:      sta SCREEN+44,y
+            dey
+            bpl loop
+            rts            
+                        
 ; Pseudo Random
 Rand3:      lda #%01000000      ; 2-bit
             .byte $3c
@@ -1294,7 +1288,16 @@ no_y:       lda COOR_X          ; Get x coordinate
             sta PTR             ; ,,
             bcc t2p_r           ; ,,
             inc PTR+1           ; ,,
-t2p_r       rts  
+t2p_r       rts 
+
+; Reset Coordinates
+; Coordinates are often stored on the stack. This resets them.
+ResetCoor:  pla
+            sta COOR_Y
+            pla
+            sta COOR_X
+            jsr Coor2Ptr
+            rts  
 
 ; Check Boundary
 ; of COOR_X and COOR_Y
@@ -1494,7 +1497,7 @@ InitGame:   lda #<Header        ; Show Board Header
             sta SMART_COUNT     ; ,,
             sta TIME            ; Initialize timer
             sta BUS_ATTR        ; Starting Business Attrition value
-            sta TORN_FL         ; Turn off tornado flag
+            sta MISR_FL         ; Turn off Min-ISR flag
             lda StartTreas      ; Set initial treasury amount
             sta TREASURY        ; ,,
             lda StartTreas+1    ; ,,
@@ -1654,8 +1657,7 @@ Mode:       .byte 147,159,163,175,183,191,195,201
 
 ; Musical Theme
 Theme:      .byte $83,$24,$99,$73            
-;Theme:      .byte $a3,$76,$a3,$8e            
-            
+
 ; Adjacent structure bit numbers
 ; Wind Farm = Bit 0
 ; School    = Bit 1
@@ -1665,9 +1667,9 @@ Theme:      .byte $83,$24,$99,$73
 ; Lake      = Bit 4 (same land value as Park)
 ; House     = Bit 5
 ; Business  = Bit 6
-; Burned    = Bit 7
+; Roads     = Bit 7 (not on the list because they're handled separately)
 AdjValues:  .byte 0,0,0,BIT_WIND,BIT_SCHOOL,BIT_FIRE,BIT_CLINIC,BIT_PARK
-            .byte 0,BIT_HOUSE,BIT_BUS,BIT_PARK,BIT_BURN        
+            .byte 0,BIT_HOUSE,BIT_BUS,BIT_PARK,0     
 
 ; Structure character at bit number
 ; See bit numbers in AdjValues
@@ -1705,10 +1707,6 @@ LakeCount:  .byte 6
 ; Build costs
 NewDevCost: .byte 5
 UpdateCost: .byte 10
-
-; Inherent values of Businesses and Houses
-InValBus:   .byte 1
-InValHouse: .byte 1
 
 ; Yearly maintenance costs of maintainable structures
 ;                 Wind Farm,School, Firehouse, Clinic, Park
