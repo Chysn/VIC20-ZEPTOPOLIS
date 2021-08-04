@@ -36,14 +36,14 @@ CHR_PROG    = $f8               ; Progress Bar
 CHR_CURSOR  = $3f               ; Cursor
 CHR_CANCEL  = $22               ; Action Cancel
 CHR_ROAD    = $23               ; Road Placeholder
-CHR_UHOUSE  = $24               ; Unoccupied House
+CHR_UHOME   = $24               ; Unoccupied Home
 CHR_UBUS    = $25               ; Unoccupied Business
 CHR_WIND    = $26               ; Wind Farm
 CHR_SCHOOL  = $27               ; School
 CHR_FIRE    = $28               ; Firehouse
 CHR_CLINIC  = $29               ; Clinic
 CHR_PARK    = $2a               ; Park               
-CHR_HOUSE   = $2c               ; House
+CHR_HOME    = $2c               ; Home
 CHR_BUS     = $2d               ; Business
 CHR_LAKE    = $2e               ; Lake (obstacle)
 CHR_BURN    = $2f               ; Burned down
@@ -70,7 +70,7 @@ BIT_SCHOOL  = %00000010
 BIT_FIRE    = %00000100
 BIT_CLINIC  = %00001000
 BIT_PARK    = %00010000
-BIT_HOUSE   = %00100000
+BIT_HOME    = %00100000
 BIT_BUS     = %01000000
 BIT_ROAD    = %10000000
 
@@ -101,11 +101,11 @@ STEPS       = $a5               ; Part of pattern with remaining steps
 CURR_DIR    = $a6               ; Current search direction
 LAST_DIR    = $a7               ; Last search direction
 RNDNUM      = $a8               ; Random number tmp
-SOLD_HOUSES = $a9               ; Number of houses sold this turn
+SOLD_HOMES  = $a9               ; Number of homes sold this turn
 SOLD_BUSES  = $aa               ; Number of businesses sold this turn
 VALUE       = $ab               ; Current property value
 ADJ_ST      = $ac               ; Adjacent structures bitfield
-HOUSE_COUNT = $ad               ; House Count
+HOME_COUNT  = $ad               ; Home Count
 BUS_COUNT   = $ae               ; Business Count
 POP         = $af               ; Population (2 bytes)
 YR_EXPEND   = $b1               ; Previous year expenditure (2 bytes)
@@ -113,7 +113,7 @@ YR_REVENUE  = $b3               ; Previous year revenue (2 bytes)
 DENOM       = $b5               ; Happiness calculator register 1
 NUMER       = $b6               ; Happiness calculator register 2 (2 bytes)
 QUAKE_FL    = $b8               ; Earthquake flag
-SMART_COUNT = $b9               ; Count of Houses with nearby Schools
+SMART_COUNT = $b9               ; Count of Homes with nearby Schools
 SMART       = $ba               ; Education (+0 - 9%)
 BUS_CAP     = $bb               ; Business Activity (2 bytes)
 BUS_CONF    = $bd               ; Business Attrition value
@@ -358,7 +358,7 @@ svc_quake:  bit QUAKE_FL
             jsr Rand15          ; Randomize volume for rumbling sound
             sta VOLUME          ; ,,
             jmp isr_r
-icons:      bit TIME            ; Flash icons as warnings that Houses
+icons:      bit TIME            ; Flash icons as warnings that Homes or
             bmi def_icons       ;   Businesses are at risk of leaving.
             lda BUS_CONF        ; If the population is insufficient to support
             cmp #LOW_CONF       ;   area business, flash the Population icon
@@ -706,7 +706,7 @@ next_r:     sty BUS_CONF        ; Set the Business attrition value
             
 ; Draw Info
 ; - If the structure has a maintenance cost, show that
-; - If the structure is a House or Business, show estimated revenue
+; - If the structure is a Home or Business, show estimated revenue
 ; - If the strucutre has no maintenance cost, show structures nearby           
 DrawInfo:   lda UNDER           ; If the structure under the cursor
             cmp #CHR_WIND       ;   has no maintenance cost,
@@ -748,7 +748,7 @@ skip_pos:   iny                 ; Move to the next bit
             cpy #7              ; ,,
             bne loop            ; ,,
             lda UNDER           ; Get character at pointer for additional info
-            cmp #CHR_HOUSE
+            cmp #CHR_HOME
             beq show_val
             cmp #CHR_BUS
             bne struct_r            
@@ -891,22 +891,22 @@ dec_vol:    lda #5              ; ,,
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Upkeep
 ; Iterate through all map cells
-;   - For Houses, calculate tax base and add to Treasury
-;   - For unprotected Houses, there's a chance of fire
+;   - For Homes, calculate tax base and add to Treasury
+;   - For unprotected Homes, there's a chance of fire
 ;   - For Businesses, calculate tax base and add to Treasury
 ;   - For unprotected Businesses, there's a chance of fire
 ;   - For Wind Farms, Firehouses, Clinics, and Schools,
 ;     subtract maintenance from Treasury
 ;   - If maintenance cannot be paid, there's a chance of fire
-;   - For unoccupied Houses and Businesses, calculate chance of
+;   - For unoccupied Homes and Businesses, calculate chance of
 ;     conversion of occupied
 Upkeep:     jsr ClrStatus       ; Clear status bar
-            lda #0              ; Reset sold house and business counters
-            sta SOLD_HOUSES     ;   which are used to limit new
+            lda #0              ; Reset sold Home and Business counters
+            sta SOLD_HOMES      ;   which are used to limit new
             sta SOLD_BUSES      ;   occupancy
-            sta HOUSE_COUNT     ; Reset House count
+            sta HOME_COUNT      ; Reset Home count
             sta BUS_COUNT       ; Reset Business count
-            sta SMART_COUNT     ; Reset smart Houses count
+            sta SMART_COUNT     ; Reset smart Home count
             sta POP             ; Reset population for recalculation
             sta POP+1           ; ,,
             lda COOR_X          ; Save cursor coordinates
@@ -923,17 +923,17 @@ rand_x:     jsr Rand31          ; Get random location 0-31
 -loop:      jsr Coor2Ptr        ; Get the character at the pointer
             ldx #$00            ; ,,
             lda (PTR,x)         ; ,,          
-            cmp #CHR_UHOUSE     ; Handle UNOCCUPIED HOUSE
+            cmp #CHR_UHOME      ; Handle UNOCCUPIED HOME
             bne ch_ubus         ; ,,
-            jsr SellHouse
+            jsr SellHome
             jmp next_map
 ch_ubus:    cmp #CHR_UBUS       ; Handle UNOCCUPIED_BUSINESS
-            bne ch_house
+            bne ch_home
             jsr SellBus
             jmp next_map
-ch_house:   cmp #CHR_HOUSE      ; Handle HOUSE
+ch_home:    cmp #CHR_HOME       ; Handle HOME
             bne ch_bus          ; ,,
-            jsr CompHouse       ; Compute House
+            jsr CompHome        ; Compute Home
             jmp next_map
 ch_bus:     cmp #CHR_BUS        ; Handle BUSINESS
             bne ch_maint
@@ -982,19 +982,19 @@ Maint:      sec                 ; Convert character to index
 maint_r:    rts            
             
 
-; Sell House
-; For an unoccupied house at the coordinate, see if it qualifies for
+; Sell Home
+; For an unoccupied Home at the coordinate, see if it qualifies for
 ; occupancy
-; Rule - If the unoccupied house has a nearby Wind Farm, it can sell
-SellHouse:  lda SOLD_HOUSES     ; If a house was sold this turn, return
+; Rule - If the unoccupied Home has a nearby Wind Farm, it can sell
+SellHome:   lda SOLD_HOMES      ; If a Home was sold this turn, return
             bne sellh_r         ; ,,
-            jsr Nearby          ; A house must have a nearby Wind Farm
+            jsr Nearby          ; A Home must have a nearby Wind Farm
             and #BIT_WIND       ; ,,
             beq sellh_r         ; ,,
-            lda #CHR_HOUSE      ; Place the house
+            lda #CHR_HOME       ; Place the Home
             jsr Place           ; ,,
-            inc SOLD_HOUSES     ; Increment sell count
-            jmp populate        ; Add population to house & add House count
+            inc SOLD_HOMES      ; Increment sell count
+            jmp populate        ; Add population to Home & add Home count
 sellh_r:    rts
 
 ; Sell Business
@@ -1002,7 +1002,7 @@ sellh_r:    rts
 ; occupancy
 ; Rules - An unoccupied Business cannot sell without a nearby Wind Farm
 ;       - If the unoccupied Business is adjacent to a Business, it can sell
-;       - If the unoccupied Business has a nearby House, it can sell
+;       - If the unoccupied Business has a nearby Home, it can sell
 SellBus:    lda SOLD_BUSES      ; If a business was sold this turn, return
             bne sellb_r         ; ,,
             lda BUS_CONF        ; If the business climate is unfavorable,
@@ -1015,9 +1015,9 @@ SellBus:    lda SOLD_BUSES      ; If a business was sold this turn, return
             lda #BIT_ROAD       ; A business must have an adjacent Road
             bit ADJ_ST          ;   to sell
             beq sellb_r         ;   ,,
-            lda #BIT_HOUSE      ; If these hurdles are cleared, it will sell
+            lda #BIT_HOME       ; If these hurdles are cleared, it will sell
             bit NEARBY_ST       ;   by either (1) being nearby an occupied
-            bne sold_bus        ;   House, or
+            bne sold_bus        ;   Home, or
             jsr Adjacents       ;   (2) being adjacent to another occupied
             and #BIT_BUS        ;   Business
             beq sellb_r         ; Otherwise, it does not sell yet
@@ -1027,17 +1027,17 @@ sold_bus:   lda #CHR_BUS        ; Place sold Business on screen
             inc BUS_COUNT       ; Increment Business count
 sellb_r:    rts
 
-; Compute House
+; Compute Home
 ; - Determine whether the family leaves or stays
-; - Assess the House value
-; - Add the tax revenue from the House
-CompHouse:  jsr Nearby          ; Get nearby structures
+; - Assess the Home value
+; - Add the tax revenue from the Home
+CompHome:   jsr Nearby          ; Get nearby structures
             lda #BIT_WIND       ; Is there a Wind Farm nearby?
             bit NEARBY_ST       ; ,,
             bne ch_hfire        ; If so, go to next check
             jsr Rand3           ; If not, there's a 1 in 4 chance that
             bne ch_hfire        ;   occupants move out
-            lda #CHR_UHOUSE     ; Otherwise, they move out
+            lda #CHR_UHOME      ; Otherwise, they move out
             jmp Place           ; ,,
 ch_hfire:   jsr FireRisk        ; Handle fire risk
             bcs comph_r         ; ,,
@@ -1046,25 +1046,25 @@ ch_emp:     lda HAPPY           ; If employment is less than 80%
             bcs ch_hclinic      ;   occupants will move out
             jsr Rand7           ;   ,,
             bne ch_hclinic      ;   ,,
-            lda #CHR_UHOUSE     ;   ,,
+            lda #CHR_UHOME      ;   ,,
             jmp Place           ;   ,,             
 ch_hclinic: lda #BIT_CLINIC     ; Is there a Clinic nearby?
             bit NEARBY_ST       ; ,,
             beq ch_hschool      ; ,,
-            lda #1              ; A nearby Clinic adds to 1 a House's
+            lda #1              ; A nearby Clinic adds to 1 a Home's
             jsr AddPop          ;   population
 ch_hschool: lda #BIT_SCHOOL     ; Is there a School nearby?
             bit NEARBY_ST       ; ,,
             beq hrevenue        ; ,,           
-            inc SMART_COUNT     ; If so, count this as a smart House
-hrevenue:   lda #CHR_HOUSE      ; Assess House property value
+            inc SMART_COUNT     ; If so, count this as a smart Home
+hrevenue:   lda #CHR_HOME       ; Assess Home property value
             jsr Assess          ; ,,
             jsr Revenue         ; Add property value to Treasury
-populate:   jsr Rand3           ; Add people to each house (3-6)
+populate:   jsr Rand3           ; Add people to each Home (3-6)
             clc                 ; ,,
             adc #3              ; ,,
             jsr AddPop          ; ,,
-            inc HOUSE_COUNT     ; Count Houses
+            inc HOME_COUNT      ; Count Homes
 comph_r:    rts
 
 ; Compute Business 
@@ -1104,7 +1104,7 @@ brevenue:   lda #CHR_BUS        ; Assess Business property value
 compbus_r:  rts  
 
 ; Handle Fire Risk
-; For Houses and Businesses, the same
+; For Homes and Businesses, the same
 ; Assumes Coordinate and NEARBY_ST are set
 ; Carry is set if the structure has been destroyed by fire
 FireRisk:   lda #BIT_FIRE
@@ -1119,8 +1119,8 @@ FireRisk:   lda #BIT_FIRE
 fire_r:     clc
             rts            
             
-; Assess House or Business Value
-; A is CHR_HOUSE or CHR_BUS
+; Assess Home or Business Value
+; A is CHR_HOME or CHR_BUS
 ; Store result in VALUE
 ; This assumes that Nearby has already been called so that NEARBY_ST and ADJ_ST
 ; are set correctly.
@@ -1130,11 +1130,11 @@ Assess:     ldy #0              ; Initialize value
             sty TMP_PTR         ; ,,
             ldy #>BusVals       ; ,,
             sty TMP_PTR+1       ; ,,
-            cmp #CHR_HOUSE      ; ,,
+            cmp #CHR_HOME       ; ,,
             bne assess_st       ; ,,
-            ldy #<HouseVals     ; Override assessment table
+            ldy #<HomeVals      ; Override assessment table
             sty TMP_PTR         ; ,,
-            ldy #>HouseVals     ; ,,
+            ldy #>HomeVals      ; ,,
             sty TMP_PTR+1       ; ,,
 assess_st:  lda NEARBY_ST       ; Use nearby structures as the current
             sta CURR_ST         ;   assessment type
@@ -1380,9 +1380,9 @@ SetColor:   pha
 ; Basically an employment percentage from 10% to 90%
 ; 90% if the number of employers exceeds the number of workers
 ; 0% if there are no Businesses
-GetHappy:   lda #"9"            ; Default to "9" if there are more Houses than
+GetHappy:   lda #"9"            ; Default to "9" if there are more Homes than
             sta HAPPY           ;   Businesses
-            ldy HOUSE_COUNT     ; Number of houses
+            ldy HOME_COUNT      ; Number of Homes
             cpy BUS_COUNT       ; ,,
             bcc happy_r         ; Same or more employers than workers so 90%
             beq happy_r         ; ,,
@@ -1391,7 +1391,7 @@ GetHappy:   lda #"9"            ; Default to "9" if there are more Houses than
             ldy BUS_COUNT       ;   ,,
             beq happy_r         ;   ,,
             sed
-            ldy HOUSE_COUNT     ; House count is the denominator
+            ldy HOME_COUNT      ; Home count is the denominator
             jsr Hex2Deci        ; Convert to decimal
             sty DENOM           ;   and store
             ldy BUS_COUNT       ; Business count is numerator
@@ -1406,12 +1406,12 @@ GetHappy:   lda #"9"            ; Default to "9" if there are more Houses than
 happy_r:    rts
             
 ; Get Smartness
-; Percentage of the number of Houses with a School nearby, to the
+; Percentage of the number of Homes with a School nearby, to the
 ; tens place.
-; 0% if there are no Schools or Houses
+; 0% if there are no Schools or Homes
 GetSmart:   lda #"0"            ; Starting default
             sta SMART           ; ,,
-            ldy HOUSE_COUNT     ; Stay at "0" if either count is 0
+            ldy HOME_COUNT      ; Stay at "0" if either count is 0
             beq smart_r         ; ,,
             lda SMART_COUNT     ; ,,
             beq smart_r         ; ,,
@@ -1423,7 +1423,7 @@ GetSmart:   lda #"0"            ; Starting default
 do_div:     sed
             jsr Hex2Deci        ; Convert to decimal
             sty DENOM           ;   and store
-            ldy SMART_COUNT     ; Number of smart Houses
+            ldy SMART_COUNT     ; Number of smart Homes
             jsr Hex2Deci        ; Convert to decimal
             sty NUMER           ;   and store
             jsr Divide          ; Perform division
@@ -1514,7 +1514,7 @@ InitGame:   lda #<Header        ; Show Board Header
             sta BUILD_IX        ; ,,
             sta POP             ; Initialize population
             sta POP+1           ; ,,
-            sta HOUSE_COUNT     ; Initialize counts
+            sta HOME_COUNT     ; Initialize counts
             sta BUS_COUNT       ; ,,
             sta SMART_COUNT     ; ,,
             sta TIME            ; Initialize timer
@@ -1679,16 +1679,16 @@ Colors:     .byte COL_ROAD,COL_UNOCC,COL_UNOCC,COL_WIND
 ; Clinic    = Bit 3
 ; Park      = Bit 4
 ; Lake      = Bit 4 (same land value as Park)
-; House     = Bit 5
+; Home      = Bit 5
 ; Business  = Bit 6
 ; Roads     = Bit 7 (not on the list because they're handled separately)
 AdjValues:  .byte 0,0,0,BIT_WIND,BIT_SCHOOL,BIT_FIRE,BIT_CLINIC,BIT_PARK
-            .byte 0,BIT_HOUSE,BIT_BUS,BIT_PARK,0     
+            .byte 0,BIT_HOME,BIT_BUS,BIT_PARK,0     
 
 ; Structure character at bit number
 ; See bit numbers in AdjValues
 BitChr:     .byte CHR_WIND,CHR_SCHOOL,CHR_FIRE,CHR_CLINIC,CHR_PARK
-            .byte CHR_HOUSE,CHR_BUS
+            .byte CHR_HOME,CHR_BUS
             
 ; Powers of 2 for bitfield lookup
 PowersOf2:  .byte 1,2,4,8,16,32,64,128
@@ -1697,7 +1697,7 @@ PowersOf2:  .byte 1,2,4,8,16,32,64,128
 CarPatt:    .byte 21,2,21,0
 
 ; Tornado thunder and lightning patterns
-TornScr:    .byte 254, 15,255, 14,254, 14, 15, 14
+TornScr:    .byte 254, 15,255,  8,254, 14,  8,  8
 TornFlash:  .byte 20,   2,  2,  9,  3,  6,  8, 10
 TornThun:   .byte $ff,$ff,$f4,$f6,$f6,$f4,$f2,$f0
 
@@ -1742,14 +1742,14 @@ UpdateCost: .byte 10
 MaintCosts: .byte 5,        15,     10,        10,     3
 
 ; Assessed values for NEARBY structures ($ff = -1)
-;                 Wind Farm, School, Firehouse, Clinic, Park, House, Business
+;                 Wind Farm, School, Firehouse, Clinic, Park, Home,  Business
 BusVals:    .byte 0,         0,      2,         0,      0,    2,     0
-HouseVals:  .byte 0,         3,      0,         2,      1,    0,     2
+HomeVals:   .byte 0,         3,      0,         2,      1,    0,     2
 
 ; Assessed values for ADJACENT structures ($ff = -1)
-;                 Wind Farm, School, Firehouse, Clinic, Park, House, Business
+;                 Wind Farm, School, Firehouse, Clinic, Park, Home,  Business
 BusAVals:   .byte $ff,       0,      0,         0,      2,    1,     2
-HouseAVals: .byte $ff,       0,      $ff,       $ff,    1,    $ff,   $ff
+HomeAVals:  .byte $ff,       0,      $ff,       $ff,    1,    $ff,   $ff
 
 ; Earthquake frequency
 ; The next earthquake will happen QuakeFreq years from now, plus rand(QuakMarg) 
@@ -1828,7 +1828,7 @@ CharSet:    .byte $00,$aa,$aa,$aa,$00,$aa,$aa,$aa  ; 0000 Parking Lot
             .byte $ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff  ; $21 Reverse Space
             .byte $00,$00,$44,$28,$10,$28,$44,$00  ; $22 Cancel
             .byte $00,$00,$fe,$00,$6c,$00,$fe,$00  ; $23 Road Placeholder       
-            .byte $00,$10,$38,$6c,$c6,$44,$44,$7c  ; $24 Unocc. House
+            .byte $00,$10,$38,$6c,$c6,$44,$44,$7c  ; $24 Unocc. Home
             .byte $00,$00,$60,$fe,$82,$aa,$82,$fe  ; $25 Unocc. Business
 WindFarm:   .byte $00,$10,$10,$38,$44,$10,$10,$10  ; $26 Wind Farm
             .byte $00,$18,$10,$7c,$ee,$fe,$aa,$aa  ; $27 School
@@ -1836,7 +1836,7 @@ WindFarm:   .byte $00,$10,$10,$38,$44,$10,$10,$10  ; $26 Wind Farm
             .byte $00,$18,$92,$fe,$ee,$c6,$ee,$fe  ; $29 Clinic
             .byte $00,$00,$40,$e0,$e0,$e0,$4e,$4a  ; $2a Park
             .byte $00,$00,$88,$cc,$ee,$cc,$88,$00  ; $2b End Turn
-            .byte $00,$10,$38,$6c,$fe,$5c,$74,$74  ; $2c House
+            .byte $00,$10,$38,$6c,$fe,$5c,$74,$74  ; $2c Home
             .byte $00,$00,$60,$fe,$aa,$fe,$aa,$fa  ; $2d Business
             .byte $00,$38,$6c,$d6,$fe,$dc,$ac,$78  ; $2e Lake
 Burning:    .byte $00,$10,$18,$3c,$6e,$ee,$cc,$78  ; $2f Burned Down
