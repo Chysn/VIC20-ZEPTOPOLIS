@@ -28,8 +28,8 @@ Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$31
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Game Configuration
 MENU_ITEMS  = 9                 ; Number of actions in menu
-HIGH_ATTR   = %00100000         ; High business attrition
-LOW_ATTR    = %00001000         ; Low business attrition
+LOW_CONF    = %00100000         ; High business attrition
+HIGH_CONF   = %00001000         ; Low business attrition
 
 ; Character Constants
 CHR_PROG    = $f8               ; Progress Bar
@@ -116,7 +116,7 @@ QUAKE_FL    = $b8               ; Earthquake flag
 SMART_COUNT = $b9               ; Count of Houses with nearby Schools
 SMART       = $ba               ; Education (+0 - 9%)
 BUS_CAP     = $bb               ; Business Activity (2 bytes)
-BUS_ATTR    = $bd               ; Business Attrition value
+BUS_CONF    = $bd               ; Business Attrition value
 COL_PTR     = $f3               ; Screen color pointer (2 bytes)
 COOR_X      = $f9               ; x coordinate
 COOR_Y      = $fa               ; y coordinate
@@ -360,8 +360,8 @@ svc_quake:  bit QUAKE_FL
             jmp isr_r
 icons:      bit TIME            ; Flash icons as warnings that Houses
             bmi def_icons       ;   Businesses are at risk of leaving.
-            lda BUS_ATTR        ; If the population is insufficient to support
-            cmp #HIGH_ATTR      ;   area business, flash the Population icon
+            lda BUS_CONF        ; If the population is insufficient to support
+            cmp #LOW_CONF       ;   area business, flash the Population icon
             bne ch_happy        ;   ,,
             lda #$21            ;   ,,
             sta SCREEN+22       ;   ,,
@@ -693,14 +693,14 @@ reset_ix:   lda #0              ; Reset build index
             jsr DrawStats       ; Draw the new stats bar
             jsr DrawBudget      ; Show the previous year's budget
             jsr DrawCursor      ; Put the cursor back
-            ldy #LOW_ATTR       ; Calculate Business Attrition value
-            lda BUS_CAP         ; If the annual Business capacity is greater
+            ldy #HIGH_CONF      ; Calculate Business Confidence value
+            lda BUS_CAP         ; If the annual Business value is greater
             cmp POP             ;   than the population, it means that the
             lda BUS_CAP+1       ;   population cannot support Businesses
             sbc POP+1           ;   ,,
             bcc next_r          ; Population is high enough
-            ldy #HIGH_ATTR      ; Population is too low
-next_r:     sty BUS_ATTR        ; Set the Business attrition value
+            ldy #LOW_CONF       ; Population is too low
+next_r:     sty BUS_CONF        ; Set the Business attrition value
             jsr MusicPlay       ; Music may have stopped during a disaster
             jmp Main  
             
@@ -803,6 +803,7 @@ next_dmg:   dey                 ; Go back for more destruction!
             sta NOISE           ; ,,
             sta VOICEL          ; ,,
             jsr NextQuake       ; Set the date of the next disaster  
+            jsr MusicInit       ; Re-initialize the music after an earthquake
             jmp ResetCoor       ; Reset the coordinates  
 
 ; Handle Tornado Disaster            
@@ -1004,8 +1005,8 @@ sellh_r:    rts
 ;       - If the unoccupied Business has a nearby House, it can sell
 SellBus:    lda SOLD_BUSES      ; If a business was sold this turn, return
             bne sellb_r         ; ,,
-            lda BUS_ATTR        ; If the business climate is unfavorable,
-            cmp #HIGH_ATTR      ;   the Business will not sell
+            lda BUS_CONF        ; If the business climate is unfavorable,
+            cmp #LOW_CONF       ;   the Business will not sell
             beq sellb_r         ;   ,,
             jsr Nearby          ; A business must have a nearby Wind Farm
             lda #BIT_WIND       ;   to sell
@@ -1070,7 +1071,7 @@ comph_r:    rts
 ; - Determine whether the Business leaves or stays
 ; - Assess the Business value
 ; - Add the tax revenue from the Business
-CompBus:    lda BUS_ATTR        ; Do population-based attrition test
+CompBus:    lda BUS_CONF        ; Do population-based confidence test
             jsr PRand           ; Every so often, a Business just
             bne bus_near        ;   closes up shop and leaves. This is
             lda #CHR_UBUS       ;   just the nature of Businesses.
@@ -1517,7 +1518,7 @@ InitGame:   lda #<Header        ; Show Board Header
             sta BUS_COUNT       ; ,,
             sta SMART_COUNT     ; ,,
             sta TIME            ; Initialize timer
-            sta BUS_ATTR        ; Starting Business Attrition value
+            sta BUS_CONF        ; Starting Business Attrition value
             sta MISR_FL         ; Turn off Min-ISR flag
             lda StartTreas      ; Set initial treasury amount
             sta TREASURY        ; ,,
@@ -1710,7 +1711,7 @@ TornThun:   .byte $ff,$ff,$f4,$f6,$f6,$f4,$f2,$f0
             .asc "/4.0/legalcode.txt",$00
             
 ;Bugfix Bytes
-            .asc $00,$00,$00,$00,$00,$00,$00
+            .asc $00,$00,$00,$00
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; MODPACK TABLES
@@ -1743,21 +1744,21 @@ MaintCosts: .byte 5,        15,     10,        10,     3
 ; Assessed values for NEARBY structures ($ff = -1)
 ;                 Wind Farm, School, Firehouse, Clinic, Park, House, Business
 BusVals:    .byte 0,         0,      2,         0,      0,    2,     0
-HouseVals:  .byte 0,         3,      0,         2,      0,    0,     2
+HouseVals:  .byte 0,         3,      0,         2,      1,    0,     2
 
 ; Assessed values for ADJACENT structures ($ff = -1)
 ;                 Wind Farm, School, Firehouse, Clinic, Park, House, Business
 BusAVals:   .byte $ff,       0,      0,         0,      2,    1,     2
-HouseAVals: .byte $ff,       0,      $ff,       $ff,    2,    $ff,   $ff
+HouseAVals: .byte $ff,       0,      $ff,       $ff,    1,    $ff,   $ff
 
 ; Earthquake frequency
 ; The next earthquake will happen QuakeFreq years from now, plus rand(QuakMarg) 
 ; years. When an earthquake happens, this timer will be reset.
 ; QuakePower determines how much damage an earthquake does
-; The default is 22 + (0-7) years, or between 22-29 years
-QuakeFreq:  .byte 22
+; The default is 15 + (0-7) years, or between 15-21 years
+QuakeFreq:  .byte 15
 QuakeMarg:  .byte %00100000
-QuakePower: .byte 12
+QuakePower: .byte 15
 
 ; Tornado Frequency
 ; Tornados are checked every turn. If the pseudo-random value is 0, there will
