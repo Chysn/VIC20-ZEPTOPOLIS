@@ -545,8 +545,12 @@ draw_sat:   jsr GetHappy        ; Compute happiness
             clc                 ; ,,            
             jsr PLOT            ; ,,
             lda HAPPY           ; Happiness display
+            clc                 ; ,,
+            adc #"0"            ; ,,
             jsr CHROUT          ; ,,
             lda SMART           ; With school percentage
+            clc                 ; 
+            adc #"0"            ; 
             jsr CHROUT          ; ,,
             ; YEAR
             ldy #18             ; Plot year display
@@ -764,10 +768,8 @@ reset_ix:   lda #0              ; Reset build index
             pha                 ; Start by temporarily increasing
             lda POP+1           ;   Population by the percentage of
             pha                 ;   Homes with nearby Schools
-            lda SMART           ;   ,,
-            sec                 ;   ,,
-            sbc #"0"            ;   SMART is a numeral character, so adjust
-            jsr AddPop          ;   Add to population
+            lda SMART           ; Temporarily add education to population
+            jsr AddPop          ;   for Business Confidence calculation
             ldy #HIGH_CONF      ; Calculate Business Confidence value
             lda BUS_CAP         ; If the annual Business value is greater
             cmp POP             ;   than the population, it means that the
@@ -1469,13 +1471,13 @@ SetColor:   pha
 ; Basically an employment percentage from 10% to 90%
 ; 90% if the number of employers exceeds the number of workers
 ; 0% if there are no Businesses
-GetHappy:   lda #"9"            ; Default to "9" if there are more Homes than
+GetHappy:   lda #9             ; Default to 9 if there are more Homes than
             sta HAPPY           ;   Businesses
             ldy HOME_COUNT      ; Number of Homes
             cpy BUS_COUNT       ; ,,
             bcc happy_r         ; Same or more employers than workers so 90%
             beq happy_r         ; ,,
-            lda #"1"            ; If there are no businesses to divide, set
+            lda #1              ; If there are no businesses to divide, set
             sta HAPPY           ;   happiness to 10%
             ldy BUS_COUNT       ;   ,,
             beq happy_r         ;   ,,
@@ -1491,22 +1493,22 @@ GetHappy:   lda #"9"            ; Default to "9" if there are more Homes than
             clc                 ; Add quotient to HAPPY
             adc HAPPY           ; ,,
             sta HAPPY           ; ,,
-            dec HAPPY           ; Decrement to compensate for starting "1"
+            dec HAPPY           ; Decrement to compensate for starting 1
 happy_r:    rts
             
 ; Get Smartness
 ; Percentage of the number of Homes with a School nearby, to the
 ; tens place.
 ; 0% if there are no Schools or Homes
-GetSmart:   lda #"0"            ; Starting default
+GetSmart:   lda #0              ; Starting default
             sta SMART           ; ,,
-            ldy HOME_COUNT      ; Stay at "0" if either count is 0
+            ldy HOME_COUNT      ; Stay at 0 if either count is 0
             beq smart_r         ; ,,
             lda SMART_COUNT     ; ,,
             beq smart_r         ; ,,
             cpy SMART_COUNT     ; If the counts are the same, force
-            bne do_div          ;   the count to "9"
-            lda #"9"            ;   ,,
+            bne do_div          ;   the count to 9
+            lda #9              ;   ,,
             sta SMART           ;   ,,
             bne smart_r         ;   ,,
 do_div:     sed
@@ -1734,6 +1736,11 @@ MusicInit:  ldy #3
 ; TAPE SAVE/LOAD
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 TapeSave:   jsr TapeSetup       ; Set up tape
+            beq TapeCancel      ; STOP was pressed
+            lda #4              ; Filename is the current four-digit year,
+            ldx #<SCREEN+40     ;   which can be scraped from the screen
+            ldy #>SCREEN+40     ;   ,,
+            jsr SETNAM          ;   ,,
             ldx #1              ; Device number
             ldy #0              ; Command (none)
             jsr SETLFS          ; ,,
@@ -1745,14 +1752,19 @@ TapeSave:   jsr TapeSetup       ; Set up tape
             iny                 ; 512 bytes
             iny                 ; ,,
             jsr SAVE            ; SAVE
-            inc SCRCOL          ; 
-TapeClnup:  inc SCRCOL          ; Put the border color back
-save_r:     jsr MusicPlay       ; Restart music
+TapeClnup:  inc SCRCOL          ; Put color back to green border (from red)
+            inc SCRCOL          ;   ,,
+            inc SCRCOL          ;   ,,
+TapeCancel: inc SCRCOL          ; Put color back to blue border (from green)
+            jsr MusicPlay       ; Restart music
             lsr ACTION_FL       ; Turn off Action flag
             jmp cancel          ; Return from tape operation cancels Action         
 
 ; Tape Load
 TapeLoad:   jsr TapeSetup       ; Set up tape
+            beq TapeCancel      ; STOP was pressed
+            lda #0              ; Get whatever the next file is
+            jsr SETNAM          ; ,,
             ldx #1              ; Tape device number
             ldy #1              ; Load to header location
             jsr SETLFS          ; ,,
@@ -1762,15 +1774,15 @@ TapeLoad:   jsr TapeSetup       ; Set up tape
             lda (PTR,x)         ;   under the Cursor
             sta UNDER           ;   ,,
             jsr Roads           ; Re-colorize the world
-            inc SCRCOL          ; ,,
             jmp TapeClnup       ; Clean up the operation
 
 ; Tape Setup
-; Sets IRQ to its normal place during tape operation    
-; Sets CHROUT to a lone RTS to suppress the normal prompts   
-; Sets volume to 0
-; Changes the border color to indicate tape operation        
-TapeSetup:  lda UNDER           ; Clear the Pointer out of the way
+; - Removes the Cursor from the screen
+; - Stops music
+; - Changes screen border color to green
+; - Waits for tape button activation or STOP
+; Returns with Z=1 if operation is canceled
+TapeSetup:  lda UNDER           ; Clear the Cursor out of the way
             jsr Place           ; ,,
             jsr MusicStop       ; Stop music during tape
             dec SCRCOL          ; Change screen border
@@ -1779,12 +1791,11 @@ TapeSetup:  lda UNDER           ; Clear the Pointer out of the way
             lda KEYDOWN         ; Check for Stop key
             cmp #$18            ; ,,
             bne wait            ; ,,
-            beq TapeClnup       ; ,,
-rolling:    dec SCRCOL          ; Decrement screen color again
-            lda #en-SaveName    ; Filename Length
-            ldx #<SaveName      ; Low byte of name address
-            ldy #>SaveName      ; High byte of name address
-            jmp SETNAM          ; ,,
+            rts                 ; Return from caller with Z=1
+rolling:    dec SCRCOL          ; Set screen color to red border
+            dec SCRCOL          ; ,,
+            dec SCRCOL          ; ,,
+            rts                 ; Return from caller with Z=0
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; DATA TABLES
@@ -1800,9 +1811,6 @@ BudgetE     .asc $21,$5e,";",$00
 ; Direction tables
 JoyTable:   .byte $00,$04,$80,$08,$10,$20          ; Corresponding direction bit
 DirTable:   .byte $01,$02,$04,$08                  ; Index to bit value
-
-SaveName:   .asc "ZEP.GAME"
-en:         ; End of filename
 
 ; Image data - Wind Farm and Burning animations, Tornado
 WFAnim1:    .byte $10,$44,$38,$10,$10
