@@ -35,7 +35,7 @@ Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$36
 Mode:       .byte 147,159,163,175,183,191,195,201         
 
 ; Musical Theme
-Theme:      .byte $55,$aa,$55,$ab
+Theme:      .byte $33,$44,$55,$66
 
 ; Starting conditions
 StartYear:  .word 2021
@@ -227,6 +227,8 @@ SETLFS      = $ffba             ; Setup logical file
 SETNAM      = $ffbd             ; Setup file name
 SAVE        = $ffd8             ; Save
 LOAD        = $ffd5             ; Load
+ISCNTC      = $ffe1             ; Check Stop key
+CS10        = $f8ab             ; Check Tape Controls
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; MAIN PROGRAM
@@ -235,7 +237,6 @@ Welcome:    jsr Setup           ; Set up hardware and initialize game
                                 ; Unlike most of my games, there's no welcome
                                 ;   screen or "press fire to start" text. The
                                 ;   game simply starts when the program does.
-            jsr InitGame        ; Initialize game
             ; Fall through to Main                                
 
 Main:       jsr Joystick        ; Wait for joystick movement
@@ -1291,7 +1292,7 @@ Delay:      clc
             adc TIME
 -loop:      cmp TIME
             bne loop
-            rts 
+LONE_RTS:   rts                 ; This is a CHROUT vector destination. Leave be!
             
 ; Clear Status Bar            
 ClrStatus:  ldy #21
@@ -1590,8 +1591,8 @@ InstallISR: sei                 ; Install the custom ISR
             lda #>ISR           ; ,,
             sta CINV+1          ; ,,
             cli                 ; ,,
-LONE_RTS:   rts                 ; This is a CHROUT vector destination. Leave be!
-
+            ; Fall through to InitGame
+            
 ; Initialize Game            
 InitGame:   lda #<Header        ; Show Board Header
             ldy #>Header        ; ,,
@@ -1747,11 +1748,8 @@ TapeSave:   lda UNDER           ; Clear the Pointer out of the way
             iny                 ; 512 bytes
             iny                 ; ,,
             jsr SAVE            ; SAVE
+            inc SCRCOL          ; 
 TapeClnup:  inc SCRCOL          ; Put the border color back
-            lda #$7a            ; Restore original CHROUT
-            sta $0326           ; ,,
-            lda #$f2            ; ,,
-            sta $0327           ; ,,
 save_r:     jsr MusicPlay       ; Restart music
             lsr ACTION_FL       ; Turn off Action flag
             jmp cancel          ; Return from tape operation cancels Action         
@@ -1767,6 +1765,7 @@ TapeLoad:   jsr TapeSetup       ; Set up tape
             lda (PTR,x)         ;   under the Cursor
             sta UNDER           ;   ,,
             jsr Roads           ; Re-colorize the world
+            inc SCRCOL          ; ,,
             jmp TapeClnup       ; Clean up the operation
 
 ; Tape Setup
@@ -1776,10 +1775,13 @@ TapeLoad:   jsr TapeSetup       ; Set up tape
 ; Changes the border color to indicate tape operation        
 TapeSetup:  jsr MusicStop       ; Stop music during tape
             dec SCRCOL          ; Change screen border
-            lda #<LONE_RTS      ; Redirect CHROUT to a lone RTS
-            sta $0326           ;   to suppress prompts
-            lda #>LONE_RTS      ;   ,,
-            sta $0327           ;   ,,
+-wait:      jsr CS10            ; Check for Record/Play
+            beq rolling         ; ,,
+            lda KEYDOWN         ; Check for Stop key
+            cmp #$18            ; ,,
+            bne wait            ; ,,
+            beq TapeClnup       ; ,,
+rolling:    dec SCRCOL          ; Decrement screen color again
             lda #0              ; Zero-length filename
             jmp SETNAM          ; ,,
 
@@ -1798,7 +1800,8 @@ BudgetE     .asc $21,$5e,";",$00
 JoyTable:   .byte $00,$04,$80,$08,$10,$20          ; Corresponding direction bit
 DirTable:   .byte $01,$02,$04,$08                  ; Index to bit value
 
-; Wind Farm and burning animation, and Tornado
+; Image data - Wind Farm and Burning animations,
+; Tornado, and original Cursor
 WFAnim1:    .byte $10,$44,$38,$10,$10
 WFAnim2:    .byte $00,$10,$10,$38,$44
 BurnAnim1:  .byte $ee,$6e,$3c,$18,$10
