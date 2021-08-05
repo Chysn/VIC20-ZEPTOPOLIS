@@ -87,8 +87,7 @@ HIGH_CONF   = %00001000         ; Low business attrition
 
 ; Character Constants
 CHR_PROG    = $f8               ; Progress Bar
-CHR_CURSOR  = $3f               ; Cursor
-CHR_CANCEL  = $22               ; Action Cancel
+CHR_CURSOR  = $22               ; Cursor
 CHR_ROAD    = $23               ; Road Placeholder
 CHR_UHOME   = $24               ; Unoccupied Home
 CHR_UBUS    = $25               ; Unoccupied Business
@@ -189,12 +188,12 @@ MUSIC_MOVER = $56               ; Change counter
 ; Game State
 YEAR        = $1ffa             ; Year (2 bytes)
 TREASURY    = $1ffc             ; Treasury (2 bytes)
-QUAKE_YR    = $1ffe             ; Year of next earthquake (2 bytes)
+QUAKE_YR    = $1ffe             ; Years until next earthquake
 
 ; System Resources - Memory
 CINV        = $0314             ; ISR vector
 NMINV       = $0318             ; Release NMI vector
--NMINV     = $fffe             ; Development NMI non-vector (uncomment for dev)
+;-NMINV     = $fffe             ; Development NMI non-vector (uncomment for dev)
 SCREEN      = $1e00             ; Screen character memory (unexpanded)
 BOARD       = SCREEN+66         ; Starting address of board
 COLOR       = $9600             ; Screen color memory (unexpanded)
@@ -292,7 +291,7 @@ ch_space:   cmp #$20            ; If there's already something else there,
 show:       ldx #0              ; Show the item being selected
             lda BUILD_IX        ; ,,
             clc                 ; ,,
-            adc #CHR_CANCEL     ; ,,
+            adc #CHR_CURSOR     ; ,,
             sta (PTR,x)         ; ,,
 -wait:      jsr Joystick        ; Wait for the action
             bmi wait            ; ,,
@@ -350,7 +349,7 @@ Build:      jsr Joystick        ; Debounce joystick for build
             bne ch_dup          ; ,,
             jmp NextTurn        ; ,,
 ch_dup:     clc                 ; If the built character is the same as the
-            adc #CHR_CANCEL     ;   one already here, then cancel the
+            adc #CHR_CURSOR     ;   one already here, then cancel the
             cmp UNDER           ;   build, to save the money
             beq cancel          ;   ,,
             lda NewDevCost      ; Default to new development cost
@@ -366,7 +365,7 @@ buy:        jsr Spend           ; Try to do the spend
             bne reg_item        ;   
             lda #%11011110      ;   character offset for placeholder.
 reg_item:   clc                 ; Show the item at the cursor
-            adc #CHR_CANCEL     ; ,,
+            adc #CHR_CURSOR     ; ,,
             sta UNDER           ; ,,
             jsr Place           ; ,,
             jsr Roads           ; Rebuild roads to account for potential
@@ -761,6 +760,14 @@ reset_ix:   lda #0              ; Reset build index
             jsr DrawStats       ; Draw the new stats bar
             jsr DrawBudget      ; Show the previous year's budget
             jsr DrawCursor      ; Put the cursor back
+            lda POP             ; ---- BUSINESS CONFIDENCE ----
+            pha                 ; Start by temporarily increasing
+            lda POP+1           ;   Population by the percentage of
+            pha                 ;   Homes with nearby Schools
+            lda SMART           ;   ,,
+            sec                 ;   ,,
+            sbc #"0"            ;   SMART is a numeral character, so adjust
+            jsr AddPop          ;   Add to population
             ldy #HIGH_CONF      ; Calculate Business Confidence value
             lda BUS_CAP         ; If the annual Business value is greater
             cmp POP             ;   than the population, it means that the
@@ -769,6 +776,10 @@ reset_ix:   lda #0              ; Reset build index
             bcc next_r          ; Population is high enough
             ldy #LOW_CONF       ; Population is too low
 next_r:     sty BUS_CONF        ; Set the Business attrition value
+            pla                 ; Restore the original population
+            sta POP+1           ; ,,
+            pla                 ; ,,
+            sta POP             ; ,,
             jsr MusicPlay       ; Music may have stopped during a disaster
             jmp Main  
             
@@ -833,12 +844,8 @@ struct_r:   lsr MISR_FL         ; Turn off Min-ISR flag
             rts 
       
 ; Handle Earthquake Disaster            
-Quake:      lda YEAR            ; Is it the Year of the Earthquake?
-            cmp QUAKE_YR        ; ,,
-            bne no_quake        ; ,,
-            lda YEAR+1          ; ,,
-            cmp QUAKE_YR+1      ; ,,
-            beq yes_quake       ; ,,
+Quake:      dec QUAKE_YR
+            beq yes_quake
 no_quake:   rts
 yes_quake:  jsr MusicStop
             lda #$ff            ; Turn on earthquake sound
@@ -1177,7 +1184,7 @@ compbus_r:  rts
 FireRisk:   lda #BIT_FIRE
             bit NEARBY_ST
             bne fire_r
-            jsr Rand15
+            jsr Rand31
             bne fire_r
             lda #CHR_BURN
             jsr Place
@@ -1189,14 +1196,9 @@ fire_r:     clc
 ; Sad
 ; Carry is set if Satisfaction is 65% or higher
 ; Carry is clear if folks are sad
-Sad:        lda HAPPY           ; If employment is 70% or more   
-            cmp #"7"            ;   residents are not sad
-            bcs sad_r           ; Carry is set if >= 70%, so return
-            cmp #"6"            ; Carry is clear if <= 50%, so return
-            bcc sad_r           ; ,,          
-            lda SMART           ; Carry is set if >= 65%, and
-            cmp #"5"            ;   clear if <= 64%
-sad_r:      rts
+Sad:        lda HAPPY
+            cmp #7
+            rts
              
 ; Assess Home or Business Value
 ; A is CHR_HOME or CHR_BUS
@@ -1635,17 +1637,14 @@ InitGame:   lda #<Header        ; Show Board Header
             
 ; Next Quake Year
 ; The next earthquake is predestined 
-NextQuake:  lda YEAR+1          ; Set the year high byte
-            sta QUAKE_YR+1      ; ,,
-            lda QuakeMarg       ; Get a random number from the quake's
-            jsr PRand           ;   margin (a power of two)
-            clc                 ; Add this margin to the known frequency
-            adc QuakeFreq       ; ,,
-            adc YEAR            ; ,,
-            sta QUAKE_YR        ; ,,
-            bcc nxquake_r
-            inc QUAKE_YR+1
-nxquake_r:  rts
+NextQuake:  lda #0
+            sta QUAKE_YR
+            lda QuakeMarg
+            jsr PRand
+            clc
+            adc QuakeFreq
+            sta QUAKE_YR
+            rts
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  
 ; MUSIC PLAYER SERVICE
@@ -1734,9 +1733,7 @@ MusicInit:  ldy #3
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; TAPE SAVE/LOAD
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-TapeSave:   lda UNDER           ; Clear the Pointer out of the way
-            jsr Place           ; ,,
-            jsr TapeSetup       ; Set up tape
+TapeSave:   jsr TapeSetup       ; Set up tape
             ldx #1              ; Device number
             ldy #0              ; Command (none)
             jsr SETLFS          ; ,,
@@ -1773,7 +1770,9 @@ TapeLoad:   jsr TapeSetup       ; Set up tape
 ; Sets CHROUT to a lone RTS to suppress the normal prompts   
 ; Sets volume to 0
 ; Changes the border color to indicate tape operation        
-TapeSetup:  jsr MusicStop       ; Stop music during tape
+TapeSetup:  lda UNDER           ; Clear the Pointer out of the way
+            jsr Place           ; ,,
+            jsr MusicStop       ; Stop music during tape
             dec SCRCOL          ; Change screen border
 -wait:      jsr CS10            ; Check for Record/Play
             beq rolling         ; ,,
@@ -1782,7 +1781,9 @@ TapeSetup:  jsr MusicStop       ; Stop music during tape
             bne wait            ; ,,
             beq TapeClnup       ; ,,
 rolling:    dec SCRCOL          ; Decrement screen color again
-            lda #0              ; Zero-length filename
+            lda #en-SaveName    ; Filename Length
+            ldx #<SaveName      ; Low byte of name address
+            ldy #>SaveName      ; High byte of name address
             jmp SETNAM          ; ,,
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1800,8 +1801,10 @@ BudgetE     .asc $21,$5e,";",$00
 JoyTable:   .byte $00,$04,$80,$08,$10,$20          ; Corresponding direction bit
 DirTable:   .byte $01,$02,$04,$08                  ; Index to bit value
 
-; Image data - Wind Farm and Burning animations,
-; Tornado, and original Cursor
+SaveName:   .asc "ZEP.GAME"
+en:         ; End of filename
+
+; Image data - Wind Farm and Burning animations, Tornado
 WFAnim1:    .byte $10,$44,$38,$10,$10
 WFAnim2:    .byte $00,$10,$10,$38,$44
 BurnAnim1:  .byte $ee,$6e,$3c,$18,$10
@@ -1897,7 +1900,7 @@ CharSet:    .byte $00,$aa,$aa,$aa,$00,$aa,$aa,$aa  ; 0000 Parking Lot
 ; Board Pieces $20 - $2f
             .byte $00,$00,$00,$00,$00,$00,$00,$00  ; $20 Space
             .byte $ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff  ; $21 Reverse Space
-            .byte $00,$00,$44,$28,$10,$28,$44,$00  ; $22 Cancel
+            .byte $00,$78,$70,$78,$5c,$0e,$04,$00  ; $22 Cursor
             .byte $00,$00,$fe,$00,$6c,$00,$fe,$00  ; $23 Road Placeholder       
             .byte $00,$10,$38,$6c,$c6,$44,$44,$7c  ; $24 Unocc. Home
             .byte $00,$00,$60,$fe,$82,$aa,$82,$fe  ; $25 Unocc. Business
@@ -1930,4 +1933,4 @@ Burning:    .byte $00,$10,$18,$3c,$6e,$ee,$cc,$78  ; $2f Burned Down
             .byte $cf,$d7,$d7,$11,$5d,$5b,$03,$ff  ; $3c Satisfaction
             .byte $83,$ff,$ab,$ff,$ab,$ff,$ab,$ff  ; $3d Calendar
             .byte $ff,$ff,$bb,$f7,$ef,$df,$bb,$ff  ; $3e Percent Sign
-            .byte $00,$78,$70,$78,$5c,$0e,$04,$00  ; $3f Cursor
+            .byte $3c,$42,$a5,$81,$a5,$99,$42,$3c  ; (Clobbered by MODPACK load)
