@@ -134,8 +134,8 @@ EAST        = 1
 SOUTH       = 2
 WEST        = 3
 FIRE        = 4
-SAVE        = 5
-LOAD        = 6
+S_KEY       = 5                 ; S has been pressed
+L_KEY       = 6                 ; L has been pressed
 
 ; Game Memory
 UNDER       = $00               ; Character under pointer
@@ -223,6 +223,10 @@ PRTSTR      = $cb1e             ; Print from data (Y,A)
 PRTFIX      = $ddcd             ; Decimal display routine (A,X)
 PLOT        = $fff0             ; Position cursor 
 CHROUT      = $ffd2             ; Write one character
+SETLFS      = $ffba             ; Setup logical file
+SETNAM      = $ffbd             ; Setup file name
+SAVE        = $ffd8             ; Save
+LOAD        = $ffd5             ; Load
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; MAIN PROGRAM
@@ -291,10 +295,10 @@ show:       ldx #0              ; Show the item being selected
             sta (PTR,x)         ; ,,
 -wait:      jsr Joystick        ; Wait for the action
             bmi wait            ; ,,
-            cpx #SAVE
+            cpx #S_KEY
             bne ch_load
             jmp TapeSave
-ch_load:    cpx #LOAD
+ch_load:    cpx #L_KEY
             bne rs_cursor
             jmp TapeLoad
 rs_cursor:  lda #%00001111      ; Reset time to reset cursor flash
@@ -1345,10 +1349,10 @@ Joystick:   lda VIA1PA          ; Read VIA1 port
 found_dir:  lda KEYDOWN         ; Key current keypress
             cmp #41             ; "S" for Save
             bne ch_L            ; ,,
-            ldx #6              ; ,, (will be 5 after DEX below)
+            ldx #S_KEY+1        ; ,, (will be 5 after DEX below)
 ch_L:       cmp #21             ; "L" for Load
             bne control_r       ; ,,
-            ldx #7              ; ,, (will be 6 after DEX below)
+            ldx #L_KEY+1        ; ,, (will be 6 after DEX below)
 control_r:  dex                 ; dex to maybe set zero flag
             rts
             
@@ -1733,9 +1737,8 @@ TapeSave:   lda UNDER           ; Clear the Pointer out of the way
             jsr Place           ; ,,
             jsr TapeSetup       ; Set up tape
             ldx #1              ; Device number
-            ldy #$ff            ; Command (none)
-            lda #42             ; Logical file number
-            jsr $ffba           ; SETLFS
+            ldy #0              ; Command (none)
+            jsr SETLFS          ; ,,
             ldx #<SCREEN        ; Low byte start
             stx $2b             ; ,,
             ldy #>SCREEN        ; High byte start
@@ -1743,10 +1746,8 @@ TapeSave:   lda UNDER           ; Clear the Pointer out of the way
             lda #$2b            ; Set tab
             iny                 ; 512 bytes
             iny                 ; ,,
-            jsr $ffd8           ; SAVE
+            jsr SAVE            ; SAVE
 TapeClnup:  inc SCRCOL          ; Put the border color back
-            lda #42             ; Close file 42
-            jsr $ffc3           ; ,,
             lda #$7a            ; Restore original CHROUT
             sta $0326           ; ,,
             lda #$f2            ; ,,
@@ -1757,16 +1758,11 @@ save_r:     jsr MusicPlay       ; Restart music
 
 ; Tape Load
 TapeLoad:   jsr TapeSetup       ; Set up tape
-            lda #$12            ; Make text reverse
-            jsr CHROUT          ; ,,
-            ldx #1              ; Device number
-            ldy #3              ; Command
-            lda #42             ; Logical file number
-            jsr $ffba           ; SETLFS
-            lda #$00            ; Set up LOAD address
-            ldx #$00            ; ,,
-            ldy #>SCREEN        ; ,,
-            jsr $ffd5           ; LOAD
+            ldx #1              ; Tape device number
+            ldy #1              ; Load to header location
+            jsr SETLFS          ; ,,
+            lda #$00            ; Command for LOAD
+            jsr LOAD            ; ,,
             ldx #0              ; Preserve whatever came from the load
             lda (PTR,x)         ;   under the Cursor
             sta UNDER           ;   ,,
@@ -1785,7 +1781,7 @@ TapeSetup:  jsr MusicStop       ; Stop music during tape
             lda #>LONE_RTS      ;   ,,
             sta $0327           ;   ,,
             lda #0              ; Zero-length filename
-            jmp $ffbd           ; ,,
+            jmp SETNAM          ; ,,
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; DATA TABLES
