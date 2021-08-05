@@ -18,11 +18,65 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; This is the tokenization of the following BASIC program, which
 ; runs this game
-;     42 SYS4110
+;     42 SYS4160
 * = $1001
-Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$31
-            .byte $30,$00,$00,$00,$00
+Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$36
+            .byte $36,$00,$00,$00
+            
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; MODPACK TABLES
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; The following tables can be used to modify the behavior of the game, to make
+; game balance harder or easier. Save a set of 57 bytes to the MODPACK address,
+; and load with LOAD"MODPACK",8
 
+; Musical Mode
+; Dorian         
+Mode:       .byte 147,159,163,175,183,191,195,201         
+
+; Musical Theme
+Theme:      .byte $55,$aa,$55,$ab
+
+; Starting conditions
+StartYear:  .word 2021
+StartTreas: .word 500
+LakeCount:  .byte 6
+
+; Build costs
+NewDevCost: .byte 5
+UpdateCost: .byte 10
+
+; Yearly maintenance costs of maintainable structures
+;                 Wind Farm,School, Firehouse, Clinic, Park
+MaintCosts: .byte 5,        15,     10,        10,     2
+
+; Assessed values for NEARBY structures ($ff = -1)
+;                 Wind Farm, School, Firehouse, Clinic, Park, Home,  Business
+BusVals:    .byte 0,         0,      2,         0,      0,    2,     0
+HomeVals:   .byte 0,         3,      0,         2,      1,    0,     2
+
+; Assessed values for ADJACENT structures ($ff = -1)
+;                 Wind Farm, School, Firehouse, Clinic, Park, Home,  Business
+BusAVals:   .byte $ff,       0,      0,         0,      2,    1,     2
+HomeAVals:  .byte $ff,       0,      $ff,       $ff,    1,    $ff,   $ff
+
+; Earthquake configuration
+; The next earthquake will happen QuakeFreq years from now, plus rand(QuakMarg) 
+; years. When an earthquake happens, this timer will be reset.
+; QuakePower determines how much damage an earthquake does
+; The default is 15 + (0-7) years, or between 15-21 years
+QuakeFreq:  .byte 15
+QuakeMarg:  .byte %00100000
+QuakePower: .byte 15
+
+; Tornado configuration
+; Tornados are checked every turn. If the pseudo-random value is 0, there will
+; be a tornado.
+; TornPath determines the maximum path length
+; The default is a 1 in 8 chance per year, with a maximum path length of 6
+TornFreq:   .byte %00100000
+TornPath:   .byte 6
+            
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; LABEL DEFINITIONS
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -80,6 +134,8 @@ EAST        = 1
 SOUTH       = 2
 WEST        = 3
 FIRE        = 4
+SAVE        = 5
+LOAD        = 6
 
 ; Game Memory
 UNDER       = $00               ; Character under pointer
@@ -92,31 +148,31 @@ PREV_Y      = $09               ; Previous y coordinate
 BUILD_IX    = $0a               ; Build index
 PROGRESS    = $0b               ; Progress Bar
 HAPPY       = $0c               ; Satisfaction (10% - 90%)
-BUILD_MASK  = $a0               ; Build mask (for wind farms)
-ACTION_FL   = $a1               ; Action flag
-NEARBY_ST   = $a2               ; Nearby structures bitfield
-PATTERN     = $a3               ; Current road search pattern
-STEP_COUNT  = $a4               ; Step count for pattern search
-STEPS       = $a5               ; Part of pattern with remaining steps
-CURR_DIR    = $a6               ; Current search direction
-LAST_DIR    = $a7               ; Last search direction
-RNDNUM      = $a8               ; Random number tmp
-SOLD_HOMES  = $a9               ; Number of homes sold this turn
-SOLD_BUSES  = $aa               ; Number of businesses sold this turn
-VALUE       = $ab               ; Current property value
-ADJ_ST      = $ac               ; Adjacent structures bitfield
-HOME_COUNT  = $ad               ; Home Count
-BUS_COUNT   = $ae               ; Business Count
-POP         = $af               ; Population (2 bytes)
-YR_EXPEND   = $b1               ; Previous year expenditure (2 bytes)
-YR_REVENUE  = $b3               ; Previous year revenue (2 bytes)
-DENOM       = $b5               ; Happiness calculator register 1
-NUMER       = $b6               ; Happiness calculator register 2 (2 bytes)
-QUAKE_FL    = $b8               ; Earthquake flag
-SMART_COUNT = $b9               ; Count of Homes with nearby Schools
-SMART       = $ba               ; Education (+0 - 9%)
-BUS_CAP     = $bb               ; Business Activity (2 bytes)
-BUS_CONF    = $bd               ; Business Attrition value
+BUILD_MASK  = $30               ; Build mask (for wind farms)
+ACTION_FL   = $31               ; Action flag
+NEARBY_ST   = $32               ; Nearby structures bitfield
+PATTERN     = $33               ; Current road search pattern
+STEP_COUNT  = $34               ; Step count for pattern search
+STEPS       = $35               ; Part of pattern with remaining steps
+CURR_DIR    = $36               ; Current search direction
+LAST_DIR    = $37               ; Last search direction
+RNDNUM      = $38               ; Random number tmp
+SOLD_HOMES  = $39               ; Number of homes sold this turn
+SOLD_BUSES  = $3a               ; Number of businesses sold this turn
+VALUE       = $3b               ; Current property value
+ADJ_ST      = $3c               ; Adjacent structures bitfield
+HOME_COUNT  = $3d               ; Home Count
+BUS_COUNT   = $3e               ; Business Count
+POP         = $3f               ; Population (2 bytes)
+YR_EXPEND   = $41               ; Previous year expenditure (2 bytes)
+YR_REVENUE  = $43               ; Previous year revenue (2 bytes)
+DENOM       = $45               ; Happiness calculator register 1
+NUMER       = $46               ; Happiness calculator register 2 (2 bytes)
+QUAKE_FL    = $48               ; Earthquake flag
+SMART_COUNT = $49               ; Count of Homes with nearby Schools
+SMART       = $4a               ; Education (+0 - 9%)
+BUS_CAP     = $4b               ; Business Activity (2 bytes)
+BUS_CONF    = $4d               ; Business Attrition value
 COL_PTR     = $f3               ; Screen color pointer (2 bytes)
 COOR_X      = $f9               ; x coordinate
 COOR_Y      = $fa               ; y coordinate
@@ -125,10 +181,10 @@ P_RAND      = $fd               ; Pseudorandom seed (2 bytes)
 TIME        = $ff               ; Jiffy counter
 
 ; Music Player Memory
-MUSIC_FL    = $8b               ; Bit 7 set if player is running
-MUSIC_REG   = $8c               ; Music shift register (4 bytes)
-MUSIC_TIMER = $90               ; Music timer
-MUSIC_MOVER = $91               ; Change counter
+MUSIC_FL    = $50               ; Bit 7 set if player is running
+MUSIC_REG   = $51               ; Music shift register (4 bytes)
+MUSIC_TIMER = $55               ; Music timer
+MUSIC_MOVER = $56               ; Change counter
 
 ; Game State
 YEAR        = $1ffa             ; Year (2 bytes)
@@ -138,11 +194,11 @@ QUAKE_YR    = $1ffe             ; Year of next earthquake (2 bytes)
 ; System Resources - Memory
 CINV        = $0314             ; ISR vector
 NMINV       = $0318             ; Release NMI vector
-;-NMINV     = $fffe             ; Development NMI non-vector (uncomment for dev)
+-NMINV     = $fffe             ; Development NMI non-vector (uncomment for dev)
 SCREEN      = $1e00             ; Screen character memory (unexpanded)
 BOARD       = SCREEN+66         ; Starting address of board
 COLOR       = $9600             ; Screen color memory (unexpanded)
-IRQ         = $eb15             ; System ISR return point
+IRQ         = $eaef             ; System ISR return point
 ORIG_HORIZ  = $ede4             ; Default horizontal screen position
 HORIZ       = $9000             ; Screen position
 VICCR4      = $9004             ; Raster location
@@ -159,6 +215,8 @@ VIA2DD      = $9122             ; Data direction register for joystick
 VIA2PB      = $9120             ; Joystick port (for right)
 CASECT      = $0291             ; Disable Commodore case
 VIATIME     = $9114             ; VIA 1 Timer 1 LSB
+POWERSOF2   = $8270             ; Bit value at index (character ROM)
+KEYDOWN     = $c5               ; Key held down
 
 ; System Resources - Routines
 PRTSTR      = $cb1e             ; Print from data (Y,A)
@@ -173,6 +231,7 @@ Welcome:    jsr Setup           ; Set up hardware and initialize game
                                 ; Unlike most of my games, there's no welcome
                                 ;   screen or "press fire to start" text. The
                                 ;   game simply starts when the program does.
+            jsr InitGame        ; Initialize game
             ; Fall through to Main                                
 
 Main:       jsr Joystick        ; Wait for joystick movement
@@ -209,7 +268,7 @@ Action:     bit MUSIC_FL        ; Start music on first action
             bmi a_debounce      ; ,,
             jsr MusicInit       ; ,,
 a_debounce: jsr Joystick        ; Debounce the fire button before entering
-            cpx #FIRE           ; ,,
+ch_fire:    cpx #FIRE           ; ,,
             beq a_debounce      ; ,,
             sec                 ; Set Action flag
             ror ACTION_FL       ; ,,
@@ -232,7 +291,13 @@ show:       ldx #0              ; Show the item being selected
             sta (PTR,x)         ; ,,
 -wait:      jsr Joystick        ; Wait for the action
             bmi wait            ; ,,
-            lda #%00001111      ; Reset time to reset cursor flash
+            cpx #SAVE
+            bne ch_load
+            jmp TapeSave
+ch_load:    cpx #LOAD
+            bne rs_cursor
+            jmp TapeLoad
+rs_cursor:  lda #%00001111      ; Reset time to reset cursor flash
             sta TIME            ; ,,
             cpx #FIRE           ; If fire is pressed, build the selected item
             beq Build           ; ,,
@@ -365,9 +430,8 @@ icons:      bit TIME            ; Flash icons as warnings that Homes or
             bne ch_happy        ;   ,,
             lda #$21            ;   ,,
             sta SCREEN+22       ;   ,,
-ch_happy:   lda HAPPY           ; If happiness is below 80%, people are at
-            cmp #"7"            ;   risk of moving out, flash the thumbs
-            bcs isr_r           ;   up icon
+ch_happy:   jsr Sad             ; Check satisfacton >= 65%
+            bcs isr_r           ;   If carry set, satisfaction is OK
             lda #$21            ;   ,,
             sta SCREEN+34       ;   ,,
             bne isr_r
@@ -518,7 +582,7 @@ Roads:      lda COOR_X          ; Save cursor coordinates
             lda (PTR,x)         ;   ,,    
             cmp #$10            ;   ,,
             bcs next_cell       ; If it's not a road, proceed to next character
-            stx TMP             ; TMP is the passageway bitfield (0000wsen)
+            stx TMP             ; TMP is the road bitfield (0000wsen)
             lda #WEST           ; Check West
             jsr CheckRoad       ; ,,
             rol TMP             ; ,,
@@ -535,9 +599,8 @@ Roads:      lda COOR_X          ; Save cursor coordinates
             lda TMP             ; Get character
             ldx #0              ; Store in screen address
             sta (PTR,x)         ; ,,
-            lda #COL_ROAD       ; Set color of color address
-            jsr SetColor        ; ,,
-next_cell:  inc COOR_Y          ; Continue iterating across all characters in   
+next_cell:  jsr PlaceCol        ; Set the color of everything else
+            inc COOR_Y          ; Continue iterating across all characters in   
             lda COOR_Y          ;   the maze
             cmp #20             ;   ,,
             bne loop            ;   ,,
@@ -1041,9 +1104,8 @@ CompHome:   jsr Nearby          ; Get nearby structures
             jmp Place           ; ,,
 ch_hfire:   jsr FireRisk        ; Handle fire risk
             bcs comph_r         ; ,,
-ch_emp:     lda HAPPY           ; If employment is less than 80%         
-            cmp #"7"            ;   there's a 1 in 8 chance that the
-            bcs ch_hclinic      ;   occupants will move out
+ch_emp:     jsr Sad             ; If occupents are not satisfied, there's a
+            bcs ch_hclinic      ;   1 in 8 chance they will move out
             jsr Rand7           ;   ,,
             bne ch_hclinic      ;   ,,
             lda #CHR_UHOME      ;   ,,
@@ -1117,8 +1179,20 @@ FireRisk:   lda #BIT_FIRE
             sec
             rts
 fire_r:     clc
-            rts            
+            rts   
             
+; Sad
+; Carry is set if Satisfaction is 65% or higher
+; Carry is clear if folks are sad
+Sad:        lda HAPPY           ; If employment is 70% or more   
+            cmp #"7"            ;   residents are not sad
+            bcs sad_r           ; Carry is set if >= 70%, so return
+            cmp #"6"            ; Carry is clear if <= 50%, so return
+            bcc sad_r           ; ,,          
+            lda SMART           ; Carry is set if >= 65%, and
+            cmp #"5"            ;   clear if <= 64%
+sad_r:      rts
+             
 ; Assess Home or Business Value
 ; A is CHR_HOME or CHR_BUS
 ; Store result in VALUE
@@ -1148,7 +1222,7 @@ assess_st:  lda NEARBY_ST       ; Use nearby structures as the current
             bcc AssessLkup      ;   ,,
             inc TMP_PTR+1       ;   ,,
 AssessLkup: ldy #6              ; Look up structures in the
--loop:      lda PowersOf2,y     ;   value table and add them to
+-loop:      lda POWERSOF2,y     ;   value table and add them to
             bit CURR_ST         ;   the VALUE storage
             beq assess_nx       ;   ,,
             lda (TMP_PTR),y     ;   ,,
@@ -1250,7 +1324,8 @@ shift_rnd:  rol RNDNUM
             
 ; Read the Joystick
 ; Return the direction in X
-; 0=North, 1=East, 2=South, 3=West, 5=Fire, $ff=None (for testing BMI/BPL)
+; 0=North, 1=East, 2=South, 3=West, 4=Fire, 5=Save, 6=Load,
+; $ff=None (for testing BMI/BPL)
 Joystick:   lda VIA1PA          ; Read VIA1 port
             and #$3c            ; Keep track of bits 2,3,4,5
             sta TMP
@@ -1267,7 +1342,14 @@ Joystick:   lda VIA1PA          ; Read VIA1 port
             bne found_dir       ; If so, set that as the joystick direction
             dex                 ; Loop back until found, or 0
             bne loop            ; ,,
-found_dir:  dex                 ; dex to maybe set zero flag
+found_dir:  lda KEYDOWN         ; Key current keypress
+            cmp #41             ; "S" for Save
+            bne ch_L            ; ,,
+            ldx #6              ; ,, (will be 5 after DEX below)
+ch_L:       cmp #21             ; "L" for Load
+            bne control_r       ; ,,
+            ldx #7              ; ,, (will be 6 after DEX below)
+control_r:  dex                 ; dex to maybe set zero flag
             rts
             
 ; Move Coordinate
@@ -1354,7 +1436,7 @@ RandCoor:   jsr Rand31          ; Get random location 0-31
 ; Then set color from Colors table
 Place:      ldx #0              ; Place the item at the screen location
             sta (PTR,x)         ; ,,
-            cmp #$10            ; Handle color lookup, with special case
+PlaceCol:   cmp #$10            ; Handle color lookup, with special case
             bcs lookup_col      ;   for roads
             lda #COL_ROAD       ;   ,,
             jmp SetColor        ;   ,,
@@ -1498,13 +1580,13 @@ Setup:      lda #254            ; Set background color
             sta NMINV           ; ,, 
             lda #>Welcome       ; ,,
             sta NMINV+1         ; ,,
-            sei                 ; Install the custom ISR
+InstallISR: sei                 ; Install the custom ISR
             lda #<ISR           ; ,,
             sta CINV            ; ,,
             lda #>ISR           ; ,,
             sta CINV+1          ; ,,
             cli                 ; ,,
-            ; Fall through to InitGame
+LONE_RTS:   rts                 ; This is a CHROUT vector destination. Leave be!
 
 ; Initialize Game            
 InitGame:   lda #<Header        ; Show Board Header
@@ -1643,6 +1725,67 @@ MusicInit:  ldy #3
             sta VOLUME
             sta MUSIC_MOVER
             jmp FetchNote
+            
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; TAPE SAVE/LOAD
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+TapeSave:   lda UNDER           ; Clear the Pointer out of the way
+            jsr Place           ; ,,
+            jsr TapeSetup       ; Set up tape
+            ldx #1              ; Device number
+            ldy #$ff            ; Command (none)
+            lda #42             ; Logical file number
+            jsr $ffba           ; SETLFS
+            ldx #<SCREEN        ; Low byte start
+            stx $2b             ; ,,
+            ldy #>SCREEN        ; High byte start
+            sty $2c             ; ,,
+            lda #$2b            ; Set tab
+            iny                 ; 512 bytes
+            iny                 ; ,,
+            jsr $ffd8           ; SAVE
+TapeClnup:  inc SCRCOL          ; Put the border color back
+            lda #42             ; Close file 42
+            jsr $ffc3           ; ,,
+            lda #$7a            ; Restore original CHROUT
+            sta $0326           ; ,,
+            lda #$f2            ; ,,
+            sta $0327           ; ,,
+save_r:     jsr MusicPlay       ; Restart music
+            lsr ACTION_FL       ; Turn off Action flag
+            jmp cancel          ; Return from tape operation cancels Action         
+
+; Tape Load
+TapeLoad:   jsr TapeSetup       ; Set up tape
+            lda #$12            ; Make text reverse
+            jsr CHROUT          ; ,,
+            ldx #1              ; Device number
+            ldy #3              ; Command
+            lda #42             ; Logical file number
+            jsr $ffba           ; SETLFS
+            lda #$00            ; Set up LOAD address
+            ldx #$00            ; ,,
+            ldy #>SCREEN        ; ,,
+            jsr $ffd5           ; LOAD
+            ldx #0              ; Preserve whatever came from the load
+            lda (PTR,x)         ;   under the Cursor
+            sta UNDER           ;   ,,
+            jsr Roads           ; Re-colorize the world
+            jmp TapeClnup       ; Clean up the operation
+
+; Tape Setup
+; Sets IRQ to its normal place during tape operation    
+; Sets CHROUT to a lone RTS to suppress the normal prompts   
+; Sets volume to 0
+; Changes the border color to indicate tape operation        
+TapeSetup:  jsr MusicStop       ; Stop music during tape
+            dec SCRCOL          ; Change screen border
+            lda #<LONE_RTS      ; Redirect CHROUT to a lone RTS
+            sta $0326           ;   to suppress prompts
+            lda #>LONE_RTS      ;   ,,
+            sta $0327           ;   ,,
+            lda #0              ; Zero-length filename
+            jmp $ffbd           ; ,,
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; DATA TABLES
@@ -1689,10 +1832,7 @@ AdjValues:  .byte 0,0,0,BIT_WIND,BIT_SCHOOL,BIT_FIRE,BIT_CLINIC,BIT_PARK
 ; See bit numbers in AdjValues
 BitChr:     .byte CHR_WIND,CHR_SCHOOL,CHR_FIRE,CHR_CLINIC,CHR_PARK
             .byte CHR_HOME,CHR_BUS
-            
-; Powers of 2 for bitfield lookup
-PowersOf2:  .byte 1,2,4,8,16,32,64,128
-                        
+                                    
 ; Search pattern for adjacent search, starting from index 3 (PTR minus 22)
 CarPatt:    .byte 21,2,21,0
 
@@ -1700,74 +1840,6 @@ CarPatt:    .byte 21,2,21,0
 TornScr:    .byte 254, 15,255,  8,254, 14,  8,  8
 TornFlash:  .byte 20,   2,  2,  9,  3,  6,  8, 10
 TornThun:   .byte $ff,$ff,$f4,$f6,$f6,$f4,$f2,$f0
-
-; License
-            .asc "THIS SOFTWARE IS RELEASED UNDER THE",$0d
-            .asc "CREATIVE COMMONS ATTRIBUTION-NONCOMMERCIAL",$0d
-            .asc "4.0 INTERNATIONAL LICENSE.",$0d
-            .asc "THE LICENSE SHOULD BE INCLUDED.",$0d
-            .asc "IF NOT, PLEASE SEE:",$0d
-            .asc "https://creativecommons.org/licenses/by-nc"
-            .asc "/4.0/legalcode.txt",$00
-            
-;Bugfix Bytes
-            .asc $00,$00,$00,$00
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; MODPACK TABLES
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; The following tables can be used to modify the behavior of the game, to make
-; game balance harder or easier. Save a set of 57 bytes to the MODPACK address,
-; and load with LOAD"MODPACK",8,1
-MODPACK:
-
-; Musical Mode
-; Dorian         
-Mode:       .byte 147,159,163,175,183,191,195,201         
-
-; Musical Theme
-Theme:      .byte $55,$aa,$55,$ab
-
-; Starting conditions
-StartYear:  .word 2021
-StartTreas: .word 500
-LakeCount:  .byte 6
-
-; Build costs
-NewDevCost: .byte 5
-UpdateCost: .byte 10
-
-; Yearly maintenance costs of maintainable structures
-;                 Wind Farm,School, Firehouse, Clinic, Park
-MaintCosts: .byte 5,        15,     10,        10,     3
-
-; Assessed values for NEARBY structures ($ff = -1)
-;                 Wind Farm, School, Firehouse, Clinic, Park, Home,  Business
-BusVals:    .byte 0,         0,      2,         0,      0,    2,     0
-HomeVals:   .byte 0,         3,      0,         2,      1,    0,     2
-
-; Assessed values for ADJACENT structures ($ff = -1)
-;                 Wind Farm, School, Firehouse, Clinic, Park, Home,  Business
-BusAVals:   .byte $ff,       0,      0,         0,      2,    1,     2
-HomeAVals:  .byte $ff,       0,      $ff,       $ff,    1,    $ff,   $ff
-
-; Earthquake frequency
-; The next earthquake will happen QuakeFreq years from now, plus rand(QuakMarg) 
-; years. When an earthquake happens, this timer will be reset.
-; QuakePower determines how much damage an earthquake does
-; The default is 15 + (0-7) years, or between 15-21 years
-QuakeFreq:  .byte 15
-QuakeMarg:  .byte %00100000
-QuakePower: .byte 15
-
-; Tornado Frequency
-; Tornados are checked every turn. If the pseudo-random value is 0, there will
-; be a tornado.
-; TornPath determines the maximum path length
-; The default is a 1 in 8 chance per year, with a maximum path length of 6
-TornFreq:   .byte %00100000
-TornPath:   .byte 6
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; CUSTOM CHARACTER SET
