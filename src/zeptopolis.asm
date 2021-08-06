@@ -1784,7 +1784,7 @@ TapeLoad:   jsr TapeSetup       ; Set up tape
             sta HAPPY           ; ,,
             pla                 ; Get the composite back for Business Confidence
             and #%11110000      ; ,,
-            asl                 ; Shift it back to the actual value and store
+            lsr                 ; Shift it back to the actual value and store
             sta BUS_CONF        ; ,,
             jsr Roads           ; Re-colorize the world
             jmp TapeClnup       ; Clean up the operation
