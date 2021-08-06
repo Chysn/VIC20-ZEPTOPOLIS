@@ -35,7 +35,7 @@ Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$36
 Mode:       .byte 147,159,163,175,183,191,195,201         
 
 ; Musical Theme
-Theme:      .byte $33,$44,$55,$66
+Theme:      .byte $55,$aa,$55,$ab
 
 ; Starting conditions
 StartYear:  .word 2021
@@ -189,6 +189,7 @@ MUSIC_MOVER = $56               ; Change counter
 YEAR        = $1ffa             ; Year (2 bytes)
 TREASURY    = $1ffc             ; Treasury (2 bytes)
 QUAKE_YR    = $1ffe             ; Years until next earthquake
+HAP_BIZCON  = $1fff             ; Satisfaction/Confidence Composite
 
 ; System Resources - Memory
 CINV        = $0314             ; ISR vector
@@ -610,7 +611,7 @@ Roads:      lda COOR_X          ; Save cursor coordinates
 next_cell:  jsr PlaceCol        ; Set the color of everything else
             inc COOR_Y          ; Continue iterating across all characters in   
             lda COOR_Y          ;   the maze
-            cmp #20             ;   ,,
+            cmp #19             ;   ,,
             bne loop            ;   ,,
             lda #$00            ;   ,,
             sta COOR_Y          ;   ,,
@@ -994,7 +995,7 @@ Upkeep:     jsr ClrStatus       ; Clear status bar
             sta COOR_Y          ; ,,
             sta PROGRESS        ; Reset Progress Bar
 rand_x:     jsr Rand31          ; Get random location 0-31
-            cmp #20             ; If it's not a good X coordinate range,
+            cmp #22             ; If it's not a good X coordinate range,
             bcs rand_x          ;   get another one
             sta COOR_X          ;   ,,
 -loop:      jsr Coor2Ptr        ; Get the character at the pointer
@@ -1023,7 +1024,7 @@ ch_maint:   cmp #CHR_WIND       ; Pay maintenance for maintainable
             jsr Maint           ;   ,,
 next_map:   inc COOR_Y
             lda COOR_Y
-            cmp #20
+            cmp #19
             bne loop
             lda #0
             sta COOR_Y
@@ -1270,7 +1271,7 @@ no_fire:    inc COOR_X
             bne loop
             inc COOR_Y
             lda COOR_Y
-            cmp #20
+            cmp #19
             beq f_out_r
             lda #0
             sta COOR_X
@@ -1296,7 +1297,7 @@ Delay:      clc
             adc TIME
 -loop:      cmp TIME
             bne loop
-LONE_RTS:   rts                 ; This is a CHROUT vector destination. Leave be!
+            rts 
             
 ; Clear Status Bar            
 ClrStatus:  ldy #21
@@ -1421,7 +1422,7 @@ CheckBound: lda COOR_X          ; Check X coordinate for <0
             bcs out             ; ,,
             lda COOR_Y          ; Check Y coordinate for <0
             bmi out             ; ,,
-            cmp #20             ; Check Y coordinate for >20
+            cmp #19             ; Check Y coordinate for >19
             bcs out             ; ,,
             rts                 ; Return with carry clear (in)
 out:        sec                 ; Return with carry set (out)
@@ -1433,7 +1434,7 @@ RandCoor:   jsr Rand31          ; Get random location 0-31
             bcs RandCoor        ;   get another one
             sta COOR_X          ; Else, keep it as X
 -rnd_y:     jsr Rand31          ; Do the same with Y
-            cmp #18             ; ,,
+            cmp #17             ; ,,
             bcs rnd_y           ; ,,
             sta COOR_Y          ; ,,
             inc COOR_X          ; Keeping the Coords off the borders, mostly
@@ -1737,6 +1738,10 @@ MusicInit:  ldy #3
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 TapeSave:   jsr TapeSetup       ; Set up tape
             beq TapeCancel      ; STOP was pressed
+            lda BUS_CONF        ; Store Business Confidence and Satisfaction
+            asl                 ;   in a single composite location for save,
+            ora HAPPY           ;   to allow all important state data to fit
+            sta HAP_BIZCON      ;   in the six bytes above the screen memory
             lda #4              ; Filename is the current four-digit year,
             ldx #<SCREEN+40     ;   which can be scraped from the screen
             ldy #>SCREEN+40     ;   ,,
@@ -1745,10 +1750,10 @@ TapeSave:   jsr TapeSetup       ; Set up tape
             ldy #0              ; Command (none)
             jsr SETLFS          ; ,,
             ldx #<SCREEN        ; Low byte start
-            stx $2b             ; ,,
+            stx $c1             ; ,,
             ldy #>SCREEN        ; High byte start
-            sty $2c             ; ,,
-            lda #$2b            ; Set tab
+            sty $c2             ; ,,
+            lda #$c1            ; Set tab
             iny                 ; 512 bytes
             iny                 ; ,,
             jsr SAVE            ; SAVE
@@ -1773,6 +1778,14 @@ TapeLoad:   jsr TapeSetup       ; Set up tape
             ldx #0              ; Preserve whatever came from the load
             lda (PTR,x)         ;   under the Cursor
             sta UNDER           ;   ,,
+            lda HAP_BIZCON      ; The Happy/Business Confidence value
+            pha                 ; Save because using it twice
+            and #%00001111      ; Isolate HAPPY and store
+            sta HAPPY           ; ,,
+            pla                 ; Get the composite back for Business Confidence
+            and #%11110000      ; ,,
+            asl                 ; Shift it back to the actual value and store
+            sta BUS_CONF        ; ,,
             jsr Roads           ; Re-colorize the world
             jmp TapeClnup       ; Clean up the operation
 
@@ -1783,6 +1796,7 @@ TapeLoad:   jsr TapeSetup       ; Set up tape
 ; - Waits for tape button activation or STOP
 ; Returns with Z=1 if operation is canceled
 TapeSetup:  lda UNDER           ; Clear the Cursor out of the way
+            sta $91             ; ,, (Clear STOP with non-$fe value)
             jsr Place           ; ,,
             jsr MusicStop       ; Stop music during tape
             dec SCRCOL          ; Change screen border
@@ -1916,7 +1930,7 @@ WindFarm:   .byte $00,$10,$10,$38,$44,$10,$10,$10  ; $26 Wind Farm
             .byte $00,$18,$10,$7c,$ee,$fe,$aa,$aa  ; $27 School
             .byte $00,$0e,$0a,$fe,$fe,$8a,$ae,$ae  ; $28 Firehouse
             .byte $00,$18,$92,$fe,$ee,$c6,$ee,$fe  ; $29 Clinic
-            .byte $00,$00,$40,$e0,$e0,$e0,$4e,$4a  ; $2a Park
+            .byte $00,$10,$38,$7c,$10,$7c,$fe,$10  ; $2a Park
             .byte $00,$00,$88,$cc,$ee,$cc,$88,$00  ; $2b End Turn
             .byte $00,$10,$38,$6c,$fe,$5c,$74,$74  ; $2c Home
             .byte $00,$00,$60,$fe,$aa,$fe,$aa,$fa  ; $2d Business
