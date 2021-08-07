@@ -52,25 +52,25 @@ MaintCosts: .byte 5,        15,     10,        10,     2
 
 ; Assessed values for NEARBY structures ($ff = -1)
 ;                 Wind Farm, School, Firehouse, Clinic, Park, Home,  Business
-BusVals:    .byte 0,         0,      2,         0,      0,    2,     0
-HomeVals:   .byte 0,         3,      0,         2,      1,    0,     2
+BusVals:    .byte 0,         0,      2,         0,      0,    1,     0
+HomeVals:   .byte 0,         2,      0,         2,      1,    0,     2
 
 ; Assessed values for ADJACENT structures ($ff = -1)
 ;                 Wind Farm, School, Firehouse, Clinic, Park, Home,  Business
-BusAVals:   .byte $ff,       0,      0,         0,      2,    1,     2
-HomeAVals:  .byte $ff,       0,      $ff,       $ff,    1,    $ff,   $ff
+BusAVals:   .byte $ff,       0,      0,         0,      2,    2,     2
+HomeAVals:  .byte $ff,       1,      $ff,       $ff,    1,    $fe,   $fe
 
 ; Earthquake configuration
 ; The next earthquake will happen QuakeFreq years from now, plus rand(QuakMarg) 
 ; years. When an earthquake happens, this timer will be reset.
 ; QuakePower determines how much damage an earthquake does
-; The default is 15 + (0-7) years, or between 15-21 years
+; The default is 15 + (0-7) years, or between 15-22 years
 QuakeFreq:  .byte 15
 QuakeMarg:  .byte %00100000
 QuakePower: .byte 15
 
 ; Tornado configuration
-; Tornados are checked every turn. If the pseudo-random value is 0, there will
+; Tornadoes are checked every turn. If the pseudo-random value is 0, there will
 ; be a tornado.
 ; TornPath determines the maximum path length
 ; The default is a 1 in 8 chance per year, with a maximum path length of 6
@@ -82,8 +82,9 @@ TornPath:   .byte 6
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Game Configuration
 MENU_ITEMS  = 9                 ; Number of actions in menu
-LOW_CONF    = %00100000         ; High business attrition
-HIGH_CONF   = %00001000         ; Low business attrition
+LOW_CONF    = %00100000         ; Low business confidence
+HIGH_CONF   = %00001000         ; High business confidence
+EMP_THRESH  = 7                 ; Employment threshhold
 
 ; Character Constants
 CHR_PROG    = $f8               ; Progress Bar
@@ -133,8 +134,8 @@ EAST        = 1
 SOUTH       = 2
 WEST        = 3
 FIRE        = 4
-S_KEY       = 5                 ; S has been pressed
-L_KEY       = 6                 ; L has been pressed
+S_KEY       = 5                 ; "S" has been pressed (Save)
+L_KEY       = 6                 ; "L" has been pressed (Load)
 
 ; Game Memory
 UNDER       = $00               ; Character under pointer
@@ -161,7 +162,7 @@ SOLD_BUSES  = $3a               ; Number of businesses sold this turn
 VALUE       = $3b               ; Current property value
 ADJ_ST      = $3c               ; Adjacent structures bitfield
 HOME_COUNT  = $3d               ; Home Count
-BUS_COUNT   = $3e               ; Business Count
+EMP_COUNT   = $3e               ; Employer Count
 POP         = $3f               ; Population (2 bytes)
 YR_EXPEND   = $41               ; Previous year expenditure (2 bytes)
 YR_REVENUE  = $43               ; Previous year revenue (2 bytes)
@@ -171,7 +172,7 @@ QUAKE_FL    = $48               ; Earthquake flag
 SMART_COUNT = $49               ; Count of Homes with nearby Schools
 SMART       = $4a               ; Education (+0 - 9%)
 BUS_CAP     = $4b               ; Business Activity (2 bytes)
-BUS_CONF    = $4d               ; Business Attrition value
+BUS_CONF    = $4d               ; Business Confidence value
 COL_PTR     = $f3               ; Screen color pointer (2 bytes)
 COOR_X      = $f9               ; x coordinate
 COOR_Y      = $fa               ; y coordinate
@@ -180,10 +181,10 @@ P_RAND      = $fd               ; Pseudorandom seed (2 bytes)
 TIME        = $ff               ; Jiffy counter
 
 ; Music Player Memory
-MUSIC_FL    = $50               ; Bit 7 set if player is running
-MUSIC_REG   = $51               ; Music shift register (4 bytes)
-MUSIC_TIMER = $55               ; Music timer
-MUSIC_MOVER = $56               ; Change counter
+MUSIC_FL    = $4e               ; Bit 7 set if player is running
+MUSIC_REG   = $4f               ; Music shift register (4 bytes)
+MUSIC_TIMER = $53               ; Music timer
+MUSIC_MOVER = $54               ; Change counter
 
 ; Game State
 YEAR        = $1ffa             ; Year (2 bytes)
@@ -228,20 +229,29 @@ SETNAM      = $ffbd             ; Setup file name
 SAVE        = $ffd8             ; Save
 LOAD        = $ffd5             ; Load
 ISCNTC      = $ffe1             ; Check Stop key
-CS10        = $f8ab             ; Check Tape Controls
+CS10        = $f8ab             ; Check tape switches
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; MAIN PROGRAM
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-Welcome:    jsr Setup           ; Set up hardware and initialize game
+Welcome:    ldx #$fb            ; Reset stack for NMI restart
+            txs                 ; ,,
+            jsr Setup           ; Set up hardware and initialize game
                                 ; Unlike most of my games, there's no welcome
                                 ;   screen or "press fire to start" text. The
                                 ;   game simply starts when the program does.
             ; Fall through to Main                                
 
-Main:       jsr Joystick        ; Wait for joystick movement
-            bmi Main            ; ,,
-ch_joy:     cpx #FIRE           ; Has fire been pressed?
+Main:       lsr ACTION_FL       ; Turn off Action flag
+-wait:      jsr Controls        ; Wait for game controls
+            bmi wait            ; ,,
+            cpx #S_KEY          ; If "S" was pressed, save the city
+            bne ch_load         ; ,,
+            jmp TapeSave        ; ,,
+ch_load:    cpx #L_KEY          ; If "L" was pressed, load a city
+            bne ch_fire         ; ,,
+            jmp TapeLoad        ; ,,
+ch_fire:    cpx #FIRE           ; Has fire been pressed?
             beq Action          ; If so, go to Action mode
             txa                 ; Move joystick direction to A and
             pha                 ;   save it for later
@@ -272,16 +282,13 @@ new_pos:    jsr DrawCursor      ; Draw the new cursor
 Action:     bit MUSIC_FL        ; Start music on first action
             bmi a_debounce      ; ,,
             jsr MusicInit       ; ,,
-a_debounce: jsr Joystick        ; Debounce the fire button before entering
-ch_fire:    cpx #FIRE           ; ,,
-            beq a_debounce      ; ,,
+a_debounce: jsr Controls        ; Debounce the joystick before entering
+            bmi a_debounce      ; ,,
             sec                 ; Set Action flag
             ror ACTION_FL       ; ,,
             lda UNDER           ; Get character at cursor
-            cmp #CHR_LAKE       ; If it's a lake, allow no action here
-            bne ch_space        ; ,,
-            lsr ACTION_FL       ; Clear action flag
-            jmp Main            ; Back to Main
+            cmp #CHR_LAKE       ; If it's a Lake, allow no action here
+            beq Main            ;   ,,
 ch_space:   cmp #$20            ; If there's already something else there,
             beq show            ;   start the build index on that item, to
             cmp #CHR_BURN       ;   make it harder to accidentally remove
@@ -289,36 +296,31 @@ ch_space:   cmp #$20            ; If there's already something else there,
             ldx #0              ;   considered "nothing else there."
             stx BUILD_IX        ;   ,,
             jsr DrawInfo        ; Show info about this structure
-show:       ldx #0              ; Show the item being selected
-            lda BUILD_IX        ; ,,
+show:       lda BUILD_IX        ; Show the structure being selected
             clc                 ; ,,
             adc #CHR_CURSOR     ; ,,
+            ldx #0              ; ,,
             sta (PTR,x)         ; ,,
--wait:      jsr Joystick        ; Wait for the action
+-debounce:  jsr Controls        ; Debounce joystick for action select
+            bpl debounce        ; ,,            
+-wait:      jsr Controls        ; Wait for the action
             bmi wait            ; ,,
-            cpx #S_KEY
-            bne ch_load
-            jmp TapeSave
-ch_load:    cpx #L_KEY
-            bne rs_cursor
-            jmp TapeLoad
-rs_cursor:  lda #%00001111      ; Reset time to reset cursor flash
+            lda #%00001111      ; Reset time to reset cursor flash
             sta TIME            ; ,,
             cpx #FIRE           ; If fire is pressed, build the selected item
             beq Build           ; ,,
 ch_prev:    cpx #WEST           ; If moving left, decrement the menu
             bne ch_next         ; ,,
             dec BUILD_IX        ; ,,
-            bpl action_d        ; ,,
-            lda #MENU_ITEMS-1   ; Or wrap around to the last item
+            bpl show            ; ,,
+            lda #MENU_ITEMS     ; Or wrap around to the last item
             sta BUILD_IX        ; ,,
-            bne action_d        ; ,,
 ch_next:    cpx #EAST           ; If moving right, increment the menu
             bne ch_cancel       ; ,,
             inc BUILD_IX        ; ,,
             lda BUILD_IX        ; ,,
             cmp #MENU_ITEMS     ; ,,
-            bcc action_d        ; Or wrap around to the first item
+            bcc show            ; Or wrap around to the first item
             lda #0              ; ,,
             sta BUILD_IX        ; ,,
 ch_cancel:  cpx #SOUTH          ; If moving down, cancel the action mode
@@ -330,16 +332,14 @@ ch_end:     cpx #NORTH          ; If moving up, go directly to end of
             bne wait            ;   turn
             lda #MENU_ITEMS     ; EOT is the item AFTER the last menu item
             sta BUILD_IX        ; ,,
-action_d:   jsr Joystick        ; Debounce joystick for action select
-            bpl action_d        ; ,,
-            jmp show            ; Go back to show item
+action_d:   bne show            ; Go back to show item
 
 ; Build Item
 ; In BUILD_IX
-Build:      jsr Joystick        ; Debounce joystick for build
-            bpl Build           ; ,,
-            lsr ACTION_FL       ; Clear Action flag
-            ldy #9              ; Clear status display
+Build:      asl ACTION_FL       ; Prevents ISR flash from messing up screen
+-debounce:  jsr Controls        ; Debounce joystick for build
+            bpl debounce        ; ,,
+            ldy #9              ; Clear right-hand part of Info Bar
             lda #$20            ; ,,
 -loop:      sta SCREEN+56,y     ; ,,
             dey                 ; ,,
@@ -435,11 +435,12 @@ icons:      bit TIME            ; Flash icons as warnings that Homes or
             bne ch_happy        ;   ,,
             lda #$21            ;   ,,
             sta SCREEN+22       ;   ,,
-ch_happy:   jsr Sad             ; Check satisfacton >= 65%
-            bcs isr_r           ;   If carry set, satisfaction is OK
-            lda #$21            ;   ,,
-            sta SCREEN+34       ;   ,,
-            bne isr_r
+ch_happy:   lda HAPPY           ; Check employment level
+            cmp #EMP_THRESH     ; ,,
+            bcs isr_r           ; If carry set, satisfaction is OK
+            lda #$21            ; Otherwise, flash the satisfaction icon
+            sta SCREEN+34       ; ,,
+            bne isr_r           ; ,,
 def_icons:  lda #CHR_POP        ; Flash the default icons back
             sta SCREEN+22       ; ,,
             lda #CHR_THUMB      ; ,,
@@ -458,8 +459,7 @@ DrawCursor: jsr Coor2Ptr        ; Convert x,y coordinates to screen location
 OnlyCursor: lda #CHR_CURSOR     ; Place the cursor
             sta (PTR,x)         ; ,,
             lda #COL_CURSOR     ; Set cursor color
-            jsr SetColor        ; ,,
-            rts
+            jmp SetColor        ; ,,
 
 ; Spend Treasury
 ; In A
@@ -511,11 +511,11 @@ Collect:    lda YR_REVENUE
             sta TREASURY+1
             rts
                         
-; Draw Stats 
-; Population   = Column 23
-; Treasury     = Column 7
-; Satisfaction = Column 13
-; Year         = Column 18
+; Draw Stats on Stat Bar
+; - Population   = Column 23
+; - Treasury     = Column 7
+; - Satisfaction = Column 13
+; - Year         = Column 18
 DrawStats:  ldy #1              ; Plot population display
             ldx #1              ; ,,
             clc                 ; ,,
@@ -611,7 +611,7 @@ Roads:      lda COOR_X          ; Save cursor coordinates
 next_cell:  jsr PlaceCol        ; Set the color of everything else
             inc COOR_Y          ; Continue iterating across all characters in   
             lda COOR_Y          ;   the maze
-            cmp #19             ;   ,,
+            cmp #20             ;   ,,
             bne loop            ;   ,,
             lda #$00            ;   ,,
             sta COOR_Y          ;   ,,
@@ -899,11 +899,6 @@ yes_tor:    jsr MusicStop       ; ,,
             jsr FiresOut        ; Clear most of the remaining fires
             sec                 ; Turn on Min-ISR flag to disable fire animation
             ror MISR_FL         ; ,,
-            ldy #7              ; Temporarily replace the burning icon with
--loop:      lda TornIcon,y      ;   the tornado icon
-            sta Burning,y       ;   ,,
-            dey                 ;   ,,
-            bpl loop            ;   ,,
             jsr RandCoor        ; Starting point of tornado
             ldy #0              ; Increase volume
 -loop:      sty VOLUME          ; ,,
@@ -914,6 +909,11 @@ yes_tor:    jsr MusicStop       ; ,,
             iny                 ; ,,         
             cpy #10             ; ,,
             bne loop            ; ,,
+            ldy #7              ; Temporarily replace the burning icon with
+-loop:      lda TornIcon,y      ;   the tornado icon
+            sta Burning,y       ;   ,,
+            dey                 ;   ,,
+            bpl loop            ;   ,,
             ldy TornPath        ; ---- START PATH ---- Maximum path length
 -loop:      ldx #0              ; If there's a Lake at the new location, the
             lda (PTR,x)         ;   tornado dissipates over the lake
@@ -978,12 +978,12 @@ dec_vol:    lda #5              ; ,,
 ;   - If maintenance cannot be paid, there's a chance of fire
 ;   - For unoccupied Homes and Businesses, calculate chance of
 ;     conversion of occupied
-Upkeep:     jsr ClrStatus       ; Clear status bar
+Upkeep:     jsr ClrInfo         ; Clear status bar
             lda #0              ; Reset sold Home and Business counters
             sta SOLD_HOMES      ;   which are used to limit new
             sta SOLD_BUSES      ;   occupancy
             sta HOME_COUNT      ; Reset Home count
-            sta BUS_COUNT       ; Reset Business count
+            sta EMP_COUNT       ; Reset employer count
             sta SMART_COUNT     ; Reset smart Home count
             sta POP             ; Reset population for recalculation
             sta POP+1           ; ,,
@@ -1024,7 +1024,7 @@ ch_maint:   cmp #CHR_WIND       ; Pay maintenance for maintainable
             jsr Maint           ;   ,,
 next_map:   inc COOR_Y
             lda COOR_Y
-            cmp #19
+            cmp #20
             bne loop
             lda #0
             sta COOR_Y
@@ -1043,7 +1043,7 @@ next_map:   inc COOR_Y
             lda #0              ;   ,,
             sta COOR_X          ;   ,,
             beq loop
-upkeep_r:   jsr ClrStatus       ; Clear status bar
+upkeep_r:   jsr ClrInfo         ; Clear Info Bar
             jmp ResetCoor       ; Reset coordinates
 
 ; Maintenance
@@ -1056,15 +1056,18 @@ Maint:      sec                 ; Convert character to index
             jsr Rand7           ;   chance that the stucture will burn
             bne maint_r         ;   down
             lda #CHR_BURN       ;   ,,
-            jsr Place           ;   ,,
+            jmp Place           ;   ,,
 maint_r:    rts            
             
 
 ; Sell Home
 ; For an unoccupied Home at the coordinate, see if it qualifies for
 ; occupancy
-; Rule - If the unoccupied Home has a nearby Wind Farm, it can sell
-SellHome:   lda SOLD_HOMES      ; If a Home was sold this turn, return
+; Rules - If the unoccupied Home has a nearby Wind Farm, it can sell
+SellHome:   lda HAPPY           ; If the satisfaction is below the
+            cmp #EMP_THRESH     ;   threshhold, no additional Homes
+            bcc sellh_r         ;   will sell
+            lda SOLD_HOMES      ; If a Home was sold this turn, return
             bne sellh_r         ; ,,
             jsr Nearby          ; A Home must have a nearby Wind Farm
             and #BIT_WIND       ; ,,
@@ -1081,7 +1084,10 @@ sellh_r:    rts
 ; Rules - An unoccupied Business cannot sell without a nearby Wind Farm
 ;       - If the unoccupied Business is adjacent to a Business, it can sell
 ;       - If the unoccupied Business has a nearby Home, it can sell
-SellBus:    lda SOLD_BUSES      ; If a business was sold this turn, return
+SellBus:    lda #BUS_CONF       ; If Business Confidence is low, new
+            cmp #LOW_CONF       ;   Business will not move in
+            beq sellb_r         ;   ,,
+            lda SOLD_BUSES      ; If a business was sold this turn, return
             bne sellb_r         ; ,,
             lda BUS_CONF        ; If the business climate is unfavorable,
             cmp #LOW_CONF       ;   the Business will not sell
@@ -1102,7 +1108,7 @@ SellBus:    lda SOLD_BUSES      ; If a business was sold this turn, return
 sold_bus:   lda #CHR_BUS        ; Place sold Business on screen
             jsr Place           ; ,,
             inc SOLD_BUSES      ; Increment sell count
-            inc BUS_COUNT       ; Increment Business count
+            inc EMP_COUNT       ; Increment employer count
 sellb_r:    rts
 
 ; Compute Home
@@ -1119,10 +1125,11 @@ CompHome:   jsr Nearby          ; Get nearby structures
             jmp Place           ; ,,
 ch_hfire:   jsr FireRisk        ; Handle fire risk
             bcs comph_r         ; ,,
-ch_emp:     jsr Sad             ; If occupents are not satisfied, there's a
-            bcs ch_hclinic      ;   1 in 8 chance they will move out
-            jsr Rand7           ;   ,,
-            bne ch_hclinic      ;   ,,
+ch_emp:     lda HAPPY           ; Check satisfaction against employment
+            cmp #EMP_THRESH     ;   threshhold
+            bcs ch_hclinic      ;   ,,
+            jsr Rand7           ; If unsatisfied, there's a 1 in 8 chance
+            bne ch_hclinic      ;   each Home will move out
             lda #CHR_UHOME      ;   ,,
             jmp Place           ;   ,,             
 ch_hclinic: lda #BIT_CLINIC     ; Is there a Clinic nearby?
@@ -1171,7 +1178,7 @@ ch_broad:   lda #BIT_ROAD       ; Does the Business still have an
 brevenue:   lda #CHR_BUS        ; Assess Business property value
             jsr Assess          ; ,,
             jsr Revenue         ; Add property value to Treasury
-            inc BUS_COUNT       ; Count Businesses
+            inc EMP_COUNT       ; Count employers
             lda VALUE           ; Add Business's value to the Business
             clc                 ;   Activity amount
             adc BUS_CAP         ;   ,,
@@ -1184,25 +1191,16 @@ compbus_r:  rts
 ; For Homes and Businesses, the same
 ; Assumes Coordinate and NEARBY_ST are set
 ; Carry is set if the structure has been destroyed by fire
-FireRisk:   lda #BIT_FIRE
-            bit NEARBY_ST
-            bne fire_r
-            jsr Rand31
-            bne fire_r
-            lda #CHR_BURN
-            jsr Place
-            sec
-            rts
+FireRisk:   lda #BIT_FIRE       ; Is there a nearby Firehouse?
+            bit NEARBY_ST       ; ,,
+            bne fire_r          ; If so, no risk
+            jsr Rand31          ; Otherwise roll a 32-sided die (about 3% 
+            bne fire_r          ;   per year per property)
+            lda #CHR_BURN       ; Burn it down!
+            jmp Place           ; CARRY IS SET by Place if not a Road
 fire_r:     clc
             rts   
-            
-; Sad
-; Carry is set if Satisfaction is 65% or higher
-; Carry is clear if folks are sad
-Sad:        lda HAPPY
-            cmp #7
-            rts
-             
+                         
 ; Assess Home or Business Value
 ; A is CHR_HOME or CHR_BUS
 ; Store result in VALUE
@@ -1271,7 +1269,7 @@ no_fire:    inc COOR_X
             bne loop
             inc COOR_Y
             lda COOR_Y
-            cmp #19
+            cmp #20
             beq f_out_r
             lda #0
             sta COOR_X
@@ -1299,8 +1297,8 @@ Delay:      clc
             bne loop
             rts 
             
-; Clear Status Bar            
-ClrStatus:  ldy #21
+; Clear Info Bar            
+ClrInfo:    ldy #21
             lda #$20
 -loop:      sta SCREEN+44,y
             dey
@@ -1332,11 +1330,11 @@ shift_rnd:  rol RNDNUM
             lda RNDNUM
             rts            
             
-; Read the Joystick
+; Read the Controls
 ; Return the direction in X
 ; 0=North, 1=East, 2=South, 3=West, 4=Fire, 5=Save, 6=Load,
 ; $ff=None (for testing BMI/BPL)
-Joystick:   lda VIA1PA          ; Read VIA1 port
+Controls:   lda VIA1PA          ; Read VIA1 port
             and #$3c            ; Keep track of bits 2,3,4,5
             sta TMP
             lda VIA2PB          ; Combine with read of bit 7
@@ -1422,7 +1420,7 @@ CheckBound: lda COOR_X          ; Check X coordinate for <0
             bcs out             ; ,,
             lda COOR_Y          ; Check Y coordinate for <0
             bmi out             ; ,,
-            cmp #19             ; Check Y coordinate for >19
+            cmp #20             ; Check Y coordinate for >19
             bcs out             ; ,,
             rts                 ; Return with carry clear (in)
 out:        sec                 ; Return with carry set (out)
@@ -1444,6 +1442,8 @@ RandCoor:   jsr Rand31          ; Get random location 0-31
 ; Place Character
 ; In A, at PTR location
 ; Then set color from Colors table
+; NOTE! Carry is set if the structure isn't a Road. FireRisk relies on this
+;       behavior, so if it changes, also revisit FireRisk
 Place:      ldx #0              ; Place the item at the screen location
             sta (PTR,x)         ; ,,
 PlaceCol:   cmp #$10            ; Handle color lookup, with special case
@@ -1475,18 +1475,18 @@ SetColor:   pha
 GetHappy:   lda #9             ; Default to 9 if there are more Homes than
             sta HAPPY           ;   Businesses
             ldy HOME_COUNT      ; Number of Homes
-            cpy BUS_COUNT       ; ,,
+            cpy EMP_COUNT       ; Compare to number of employers
             bcc happy_r         ; Same or more employers than workers so 90%
             beq happy_r         ; ,,
             lda #1              ; If there are no businesses to divide, set
             sta HAPPY           ;   happiness to 10%
-            ldy BUS_COUNT       ;   ,,
+            ldy EMP_COUNT       ;   ,,
             beq happy_r         ;   ,,
             sed
             ldy HOME_COUNT      ; Home count is the denominator
             jsr Hex2Deci        ; Convert to decimal
             sty DENOM           ;   and store
-            ldy BUS_COUNT       ; Business count is numerator
+            ldy EMP_COUNT       ; Employer count is numerator
             jsr Hex2Deci        ;   Convert to decimal
             sty NUMER           ;   And store
             jsr Divide          ; Multiply NUMER by 10
@@ -1606,8 +1606,8 @@ InitGame:   lda #<Header        ; Show Board Header
             sta BUILD_IX        ; ,,
             sta POP             ; Initialize population
             sta POP+1           ; ,,
-            sta HOME_COUNT     ; Initialize counts
-            sta BUS_COUNT       ; ,,
+            sta HOME_COUNT      ; Initialize counts
+            sta EMP_COUNT       ; ,,
             sta SMART_COUNT     ; ,,
             sta TIME            ; Initialize timer
             sta BUS_CONF        ; Starting Business Attrition value
@@ -1736,19 +1736,21 @@ MusicInit:  ldy #3
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; TAPE SAVE/LOAD
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-TapeSave:   jsr TapeSetup       ; Set up tape
-            beq TapeCancel      ; STOP was pressed
+TapeSave:   lda #250            ; Red border for Save
+            sta SCRCOL          ; ,,
+            jsr TapeSetup       ; Set up tape
+            beq TapeClnup       ; STOP was pressed
             lda BUS_CONF        ; Store Business Confidence and Satisfaction
             asl                 ;   in a single composite location for save,
             ora HAPPY           ;   to allow all important state data to fit
             sta HAP_BIZCON      ;   in the six bytes above the screen memory
+            ldx #1              ; Device number
+            ldy #0              ; Command (none)
+            jsr SETLFS          ; ,,            
             lda #4              ; Filename is the current four-digit year,
             ldx #<SCREEN+40     ;   which can be scraped from the screen
             ldy #>SCREEN+40     ;   ,,
             jsr SETNAM          ;   ,,
-            ldx #1              ; Device number
-            ldy #0              ; Command (none)
-            jsr SETLFS          ; ,,
             ldx #<SCREEN        ; Low byte start
             stx $c1             ; ,,
             ldy #>SCREEN        ; High byte start
@@ -1757,22 +1759,21 @@ TapeSave:   jsr TapeSetup       ; Set up tape
             iny                 ; 512 bytes
             iny                 ; ,,
             jsr SAVE            ; SAVE
-TapeClnup:  inc SCRCOL          ; Put color back to green border (from red)
-            inc SCRCOL          ;   ,,
-            inc SCRCOL          ;   ,,
-TapeCancel: inc SCRCOL          ; Put color back to blue border (from green)
+TapeClnup:  lda #254            ; Return screen color to normal
+            sta SCRCOL          ; ,,
             jsr MusicPlay       ; Restart music
-            lsr ACTION_FL       ; Turn off Action flag
-            jmp cancel          ; Return from tape operation cancels Action         
+            jmp new_pos         ; Return from tape operation        
 
 ; Tape Load
-TapeLoad:   jsr TapeSetup       ; Set up tape
-            beq TapeCancel      ; STOP was pressed
-            lda #0              ; Get whatever the next file is
-            jsr SETNAM          ; ,,
+TapeLoad:   lda #253            ; Green border for Load
+            sta SCRCOL          ; ,,
+            jsr TapeSetup       ; Set up tape
+            beq TapeClnup       ; STOP was pressed
             ldx #1              ; Tape device number
             ldy #1              ; Load to header location
             jsr SETLFS          ; ,,
+            lda #0              ; Get whatever the next file is
+            jsr SETNAM          ; ,,
             lda #$00            ; Command for LOAD
             jsr LOAD            ; ,,
             ldx #0              ; Preserve whatever came from the load
@@ -1796,19 +1797,19 @@ TapeLoad:   jsr TapeSetup       ; Set up tape
 ; - Waits for tape button activation or STOP
 ; Returns with Z=1 if operation is canceled
 TapeSetup:  lda UNDER           ; Clear the Cursor out of the way
-            sta $91             ; ,, (Clear STOP with non-$fe value)
             jsr Place           ; ,,
+            lda #0              ; Turn off some stuff
+            sta $91             ;   STOP isn't down
+            sta $9d             ;   Make sure control messages are off
             jsr MusicStop       ; Stop music during tape
-            dec SCRCOL          ; Change screen border
 -wait:      jsr CS10            ; Check for Record/Play
             beq rolling         ; ,,
             lda KEYDOWN         ; Check for Stop key
             cmp #$18            ; ,,
             bne wait            ; ,,
             rts                 ; Return from caller with Z=1
-rolling:    dec SCRCOL          ; Set screen color to red border
-            dec SCRCOL          ; ,,
-            dec SCRCOL          ; ,,
+rolling:    lda #255            ; Yellow border for rolling tape
+            sta SCRCOL          ; ,,
             rts                 ; Return from caller with Z=0
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1923,7 +1924,7 @@ CharSet:    .byte $00,$aa,$aa,$aa,$00,$aa,$aa,$aa  ; 0000 Parking Lot
             .byte $00,$00,$00,$00,$00,$00,$00,$00  ; $20 Space
             .byte $ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff  ; $21 Reverse Space
             .byte $00,$78,$70,$78,$5c,$0e,$04,$00  ; $22 Cursor
-            .byte $00,$00,$fe,$00,$6c,$00,$fe,$00  ; $23 Road Placeholder       
+            .byte $44,$54,$54,$44,$44,$54,$54,$44  ; $23 Road Placeholder       
             .byte $00,$10,$38,$6c,$c6,$44,$44,$7c  ; $24 Unocc. Home
             .byte $00,$00,$60,$fe,$82,$aa,$82,$fe  ; $25 Unocc. Business
 WindFarm:   .byte $00,$10,$10,$38,$44,$10,$10,$10  ; $26 Wind Farm
