@@ -18,17 +18,18 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; This is the tokenization of the following BASIC program, which
 ; runs this game
-;     42 SYS4160
+;     42 SYS4167
 * = $1001
 Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$36
-            .byte $38,$00,$00,$00
+            .byte $37,$00,$00,$00
             
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; MODPACK TABLES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; The following tables can be used to modify the behavior of the game, to make
-; game balance harder or easier. Save a set of 57 bytes to the MODPACK address,
-; and load using the in-game "L" city load option.
+; game balance harder or easier. Save a set of 58 bytes to the MODPACK address,
+; and load using the in-game "L" city load option. See modpack-boilerplate.asm
+; for more information.
 
 ; Musical Mode
 ; Dorian         
@@ -66,12 +67,11 @@ HomeAVals:  .byte $ff,       1,      $ff,       $ff,    1,    $fe,   $ff
 FireRisk:   .byte %00010000
 
 ; Earthquake configuration
-; The next earthquake will happen QuakeFreq years from now, plus rand(QuakMarg) 
-; years. When an earthquake happens, this timer will be reset.
+; The next Earthquake will happen QuakeFreq years from now, plus 0-7
+; years. When an Earthquake happens, this timer will be reset.
 ; QuakePower determines how much damage an earthquake does
-; The default is 17 + (0-7) years, or between 17-24 years
-QuakeFreq:  .byte 17
-QuakeMarg:  .byte %00100000
+; The default is 15 + (0-7) years, or between 15-22 years
+QuakeFreq:  .byte 15
 QuakePower: .byte 15
 
 ; Tornado configuration
@@ -83,10 +83,10 @@ TornFreq:   .byte %00100000
 TornPath:   .byte 6
 
 ; Pandemic configuration
-; Pandemics are checked every turn. If the pseudo-random value is 0, there will
-; be a Pandemic, which will last for one year.
-; The default is a 1 in 16 chance per year
-PandFreq:   .byte %00010000
+; The next Pandemic will happen PandFreq years from now, plus 0-8 years.
+; When a Pandemic happens, this timer will be reset.
+; The default is 25 + (0-7) years, or between 25-32 years
+PandFreq:   .byte 25
             
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; LABEL DEFINITIONS
@@ -159,7 +159,6 @@ PREV_X      = $08               ; Previous x coordinate
 PREV_Y      = $09               ; Previous y coordinate
 BUILD_IX    = $0a               ; Build index
 RNDNUM      = $0b               ; Random number tmp
-HAPPY       = $0c               ; Satisfaction (10% - 90%)
 BUILD_MASK  = $30               ; Build mask (for wind farms)
 ACTION_FL   = $31               ; Action flag
 NEARBY_ST   = $32               ; Nearby structures bitfield
@@ -185,8 +184,7 @@ QUAKE_FL    = $48               ; Earthquake flag
 VALUE       = $49               ; Current property value
 SMART       = $4b               ; Education (+0 - 9%)
 BUS_CAP     = $4c               ; Business Activity (2 bytes)
-BZCON_FL    = $4e               ; Business Confidence Low (bit 7 set)
-ADJ_ST      = $4f               ; Adjacent structures bitfield
+ADJ_ST      = $4e               ; Adjacent structures bitfield
 COL_PTR     = $f3               ; Screen color pointer (2 bytes)
 YR_EXPEND   = $f9               ; Previous year expenditure (2 bytes)
 PTR         = $fb               ; Pointer (2 bytes)
@@ -194,16 +192,19 @@ P_RAND      = $fd               ; Pseudorandom seed (2 bytes)
 TIME        = $ff               ; Jiffy counter
 
 ; Music Player Memory
-MUSIC_FL    = $50               ; Bit 7 set if player is running
-MUSIC_REG   = $51               ; Music shift register (4 bytes)
-MUSIC_TIMER = $55               ; Music timer
-MUSIC_MOVER = $56               ; Change counter
+MUSIC_REG   = $2b               ; Music shift register (4 bytes)
+MUSIC_FL    = $10               ; Bit 7 set if player is running
+MUSIC_TIMER = $11               ; Music timer
+MUSIC_MOVER = $12               ; Change counter
 
 ; Game State
+PAND_YR     = $1ff7             ; Years until next Pandemic
+PAND_COUNT  = $1ff8             ; Pandemic countdown
+BZCON_FL    = $1ff9             ; Business Confidence flag
 YEAR        = $1ffa             ; Year (2 bytes)
 TREASURY    = $1ffc             ; Treasury (2 bytes)
-QUAKE_YR    = $1ffe             ; Years until next earthquake
-HAP_BIZCON  = $1fff             ; Satisfaction/Confidence Composite
+QUAKE_YR    = $1ffe             ; Years until next Earthquake
+HAPPY       = $1fff             ; Satisfaction (10% - 90%)
 
 ; System Resources - Memory
 CINV        = $0314             ; ISR vector
@@ -215,6 +216,7 @@ COLOR       = $9600             ; Screen color memory (unexpanded)
 IRQ         = $eaef             ; System ISR return point
 ORIG_HORIZ  = $ede4             ; Default horizontal screen position
 HORIZ       = $9000             ; Screen position
+VICCR3      = $9003             ; Screen height
 VICCR4      = $9004             ; Raster location
 VICCR5      = $9005             ; Character map register
 VOICEH      = $900c             ; High sound register
@@ -757,9 +759,7 @@ next_adj:   dey                 ; Iterate through entire pattern
             rts
        
 ; Advance to Next Turn            
-NextTurn:   lda #254            ; Reset screen color
-            sta SCRCOL          ; ,,
-            lda UNDER           ; Replace previous character
+NextTurn:   lda UNDER           ; Replace previous character
             jsr Place           ; ,,
             inc YEAR            ; Increment year
             bne reset_ix        ; ,,
@@ -897,7 +897,7 @@ next_dmg:   dey                 ; Go back for more destruction!
             sta NOISE           ; ,,
             sta VOICEL          ; ,,
             jsr NextQuake       ; Set the date of the next disaster  
-            jsr MusicInit       ; Re-initialize the music after an earthquake
+            jsr MusicPlay       ; Re-initialize the music after an earthquake
             jmp ResetCoor       ; Reset the coordinates  
 
 ; Handle Tornado Disaster            
@@ -979,16 +979,19 @@ dec_vol:    lda #5              ; ,,
             jmp ResetCoor       ; Reset coordinates
 
 ; Handle Pandemic disaster            
-Pandemic:   lda PandFreq        ; Get frequency of Pandemic in power of two
-            jsr PRand           ; If this random check is 0, there's a
-            beq yes_pand        ;   tornado
-            lsr PAND_FL         ; Turn off Pandemic flag
+Pandemic:   lda PAND_COUNT      ; Is there a Pandemic currenly in progress?
+            bpl yes_pand        ; ,,
+            dec PAND_YR         ; Count down years until Pandemic
+            beq st_pand         ; Is it time? Go to Start
             rts                 ; Otherwise, nothing happens
-yes_pand:   lda #255            ; Turn the border yellow during the Pandemic
-            sta SCRCOL          ;   year upkeep
-            sec                 ; Turn on Pandemic flag
-            ror PAND_FL         ; ,,
+st_pand:    jsr Rand3           ; Pandemic is starting
+            sta PAND_COUNT      ; Set the countdown (how long it will last)
+pand_scr:   lda #255            ; Screen border to yellow
+            sta SCRCOL          ; ,,
             rts
+yes_pand:   dec PAND_COUNT      ; Pandemic in progress, set screen color
+            bpl pand_scr        ; ,,
+            jmp NextPand
                                      
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; UPKEEP ROUTINES
@@ -1137,8 +1140,8 @@ ch_emp:     lda HAPPY           ; Check satisfaction against employment
 ch_hclinic: lda #BIT_CLINIC     ; Is there a Clinic nearby?
             bit NEARBY_ST       ; ,,
             beq ch_hschool      ; ,,
-            bit PAND_FL         ; Skip the Clinic population bonus in a
-            bne ch_hschool      ;   Pandemic year
+            lda PAND_COUNT      ; Skip the Clinic population bonus in a
+            bpl ch_hschool      ;   Pandemic year
             lda #1              ; A nearby Clinic adds to 1 a Home's
             jsr AddPop          ;   population
 ch_hschool: lda #BIT_SCHOOL     ; Is there a School nearby?
@@ -1151,8 +1154,8 @@ hrevenue:   lda #CHR_HOME       ; Assess Home property value
             lda #BIT_CLINIC     ; If there's a clinic, go to healthy
             bit NEARBY_ST       ;   population increase
             bne healthy         ;   ,,
-populate:   bit PAND_FL         ; Is there a Pandemic going on?
-            bpl healthy         ;   If not, go to normal population
+populate:   lda PAND_COUNT      ; Is there a Pandemic going on?
+            bmi healthy         ;   If not, go to normal population
             lda #0              ; If this Home is affected by the Pandemic,
             beq sick            ;   it loses the random 0-3 population
 healthy:    jsr Rand3           ; Add people to each Home (3-6)
@@ -1569,8 +1572,8 @@ Hex2Deci:   lda #$00
 ; SETUP ROUTINES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Set up hardware
-Setup:      lda #254            ; Set background color
-            sta SCRCOL          ; ,,
+Setup:      lda #44             ; Set 22-character screen height
+            sta VICCR3          ;
             lda #0              ; Turn off sound registers
             sta NOISE           ; ,, 
             sta VOICEL          ; ,,
@@ -1623,6 +1626,8 @@ InitGame:   lda #<Header        ; Show Board Header
             sta YEAR            ; ,,
             lda StartYear+1     ; ,,
             sta YEAR+1          ; ,,
+            lda #$ff            ; Reset Pandemic Counter
+            sta PAND_COUNT      ; ,,
             ldy LakeCount       ; Add a number of Lakes to the board
 -loop:      jsr RandCoor        ; ,,
             lda #CHR_LAKE       ; ,,
@@ -1639,15 +1644,23 @@ InitGame:   lda #<Header        ; Show Board Header
             dey                 ; ,,
             bpl loop            ; ,,
             jsr DrawCursor      ; Show cursor
+            jsr NextPand        ; Set next Pandemic year
             ; Fall through to NextQuake
             
 ; Next Quake Year
-; The next earthquake is predestined 
-NextQuake:  lda QuakeMarg
-            jsr PRand
+NextQuake:  jsr Rand7
             clc
             adc QuakeFreq
             sta QUAKE_YR
+            rts
+                        
+; Next Pandemic Year
+NextPand:   lda #254            ; Pandemic ends. Reset screen color
+            sta SCRCOL          ; ,,
+            jsr Rand7
+            clc
+            adc PandFreq
+            sta PAND_YR
             rts
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  
@@ -1676,16 +1689,14 @@ musicsh:    asl MUSIC_REG       ; Shift 32-bit register left
             sta MUSIC_REG       ; ,,
             dec MUSIC_MOVER     ; When this counter hits 0, alter the music
             bne FetchNote       ;   by flipping bit 0 of each byte in the
-            jsr Rand3           ;   shift register
-            tay                 ;   ,,
+            ldy #3              ;   shift register
 -loop:      lda MUSIC_REG,y     ;   ,,
             eor #$01            ;   ,,
             sta MUSIC_REG,y     ;   ,,
+            dey
             dey                 ;   ,,
             bpl loop            ;   ,,
-            lda MUSIC_REG+2     ; Reset the mover by an amount determined
-            lsr                 ;   by a register byte
-            ora #%00000001      ;   ,,
+            lda #$7f            ; Reset music mover timer
             sta MUSIC_MOVER     ;   ,,
 FetchNote:  lda #TEMPO          ; Reset the timer
             sta MUSIC_TIMER     ; ,,
@@ -1742,9 +1753,6 @@ TapeSave:   ldx #209            ; Record icon
             lda #250            ; Screen/Border color (red border)
             jsr TapeSetup       ; Set up tape
             beq TapeClnup       ; STOP was pressed
-            lda BZCON_FL        ; Store Business Confidence and Satisfaction
-            ora HAPPY           ;   in a single value to allow key state to be
-            sta HAP_BIZCON      ;   in the six bytes above the screen memory
             ldx #1              ; Device number
             ldy #0              ; Command (none)
             jsr SETLFS          ; ,,            
@@ -1780,13 +1788,6 @@ TapeLoad:   lda #253            ; Screen/Border color (green border)
             ldx #0              ; Preserve whatever came from the load
             lda (PTR,x)         ;   under the Cursor
             sta UNDER           ;   ,,
-            lda HAP_BIZCON      ; The Happy/Business Confidence value
-            pha                 ; Save because using it twice
-            and #%00001111      ; Isolate HAPPY and store
-            sta HAPPY           ; ,,
-            pla                 ; Isolate BZCON_FL and store
-            and #%11110000      ; ,,
-            sta BZCON_FL        ; ,,
             jsr Roads           ; Re-colorize the world
             jmp TapeClnup       ; Clean up the operation
 
