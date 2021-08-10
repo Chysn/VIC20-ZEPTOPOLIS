@@ -21,21 +21,21 @@
 ;     42 SYS4160
 * = $1001
 Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$36
-            .byte $36,$00,$00,$00
+            .byte $38,$00,$00,$00
             
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; MODPACK TABLES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; The following tables can be used to modify the behavior of the game, to make
 ; game balance harder or easier. Save a set of 57 bytes to the MODPACK address,
-; and load with LOAD"MODPACK",8
+; and load using the in-game "L" city load option.
 
 ; Musical Mode
 ; Dorian         
 Mode:       .byte 147,159,163,175,183,191,195,201         
 
 ; Musical Theme
-Theme:      .byte $55,$aa,$55,$ab
+Theme:      .byte $33,$44,$55,$66
 
 ; Starting conditions
 StartYear:  .word 2021
@@ -48,43 +48,54 @@ UpdateCost: .byte 10
 
 ; Yearly maintenance costs of maintainable structures
 ;                 Wind Farm,School, Firehouse, Clinic, Park
-MaintCosts: .byte 5,        15,     10,        10,     2
+MaintCosts: .byte 5,        15,     10,        10,     1
 
 ; Assessed values for NEARBY structures ($ff = -1)
 ;                 Wind Farm, School, Firehouse, Clinic, Park, Home,  Business
-BusVals:    .byte 0,         0,      2,         0,      0,    1,     0
-HomeVals:   .byte 0,         2,      0,         2,      1,    0,     2
+BusNVals:   .byte 0,         0,      2,         0,      0,    2,     0
+HomeNVals:  .byte 0,         2,      0,         2,      1,    0,     2
 
 ; Assessed values for ADJACENT structures ($ff = -1)
 ;                 Wind Farm, School, Firehouse, Clinic, Park, Home,  Business
-BusAVals:   .byte $ff,       0,      0,         0,      2,    2,     2
-HomeAVals:  .byte $ff,       1,      $ff,       $ff,    1,    $fe,   $fe
+BusAVals:   .byte $ff,       0,      1,         0,      1,    1,     2
+HomeAVals:  .byte $ff,       1,      $ff,       $ff,    1,    $fe,   $ff
+
+; Fire Risk configuration
+; This is the annual risk of an unprotected property (Home or Business) burning
+; down. It is expressed as a carry at a specific bit value.
+FireRisk:   .byte %00010000
 
 ; Earthquake configuration
 ; The next earthquake will happen QuakeFreq years from now, plus rand(QuakMarg) 
 ; years. When an earthquake happens, this timer will be reset.
 ; QuakePower determines how much damage an earthquake does
-; The default is 15 + (0-7) years, or between 15-22 years
-QuakeFreq:  .byte 15
+; The default is 17 + (0-7) years, or between 17-24 years
+QuakeFreq:  .byte 17
 QuakeMarg:  .byte %00100000
 QuakePower: .byte 15
 
 ; Tornado configuration
 ; Tornadoes are checked every turn. If the pseudo-random value is 0, there will
-; be a tornado.
+; be a Tornado.
 ; TornPath determines the maximum path length
 ; The default is a 1 in 8 chance per year, with a maximum path length of 6
 TornFreq:   .byte %00100000
 TornPath:   .byte 6
+
+; Pandemic configuration
+; Pandemics are checked every turn. If the pseudo-random value is 0, there will
+; be a Pandemic, which will last for one year.
+; The default is a 1 in 16 chance per year
+PandFreq:   .byte %00010000
             
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; LABEL DEFINITIONS
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Game Configuration
 MENU_ITEMS  = 9                 ; Number of actions in menu
-LOW_CONF    = %00100000         ; Low business confidence
-HIGH_CONF   = %00001000         ; High business confidence
 EMP_THRESH  = 7                 ; Employment threshhold
+TEMPO       = 10                ; Music tempo (lower is faster)
+HEIGHT      = 19                ; Maximum Y position
 
 ; Character Constants
 CHR_PROG    = $f8               ; Progress Bar
@@ -136,6 +147,7 @@ WEST        = 3
 FIRE        = 4
 S_KEY       = 5                 ; "S" has been pressed (Save)
 L_KEY       = 6                 ; "L" has been pressed (Load)
+F1          = 7                 ; F1 has been pressed (End Year)
 
 ; Game Memory
 UNDER       = $00               ; Character under pointer
@@ -146,7 +158,7 @@ MISR_FL     = $05               ; Minimum ISR Flag (only timer and music)
 PREV_X      = $08               ; Previous x coordinate
 PREV_Y      = $09               ; Previous y coordinate
 BUILD_IX    = $0a               ; Build index
-PROGRESS    = $0b               ; Progress Bar
+RNDNUM      = $0b               ; Random number tmp
 HAPPY       = $0c               ; Satisfaction (10% - 90%)
 BUILD_MASK  = $30               ; Build mask (for wind farms)
 ACTION_FL   = $31               ; Action flag
@@ -156,35 +168,36 @@ STEP_COUNT  = $34               ; Step count for pattern search
 STEPS       = $35               ; Part of pattern with remaining steps
 CURR_DIR    = $36               ; Current search direction
 LAST_DIR    = $37               ; Last search direction
-RNDNUM      = $38               ; Random number tmp
-SOLD_HOMES  = $39               ; Number of homes sold this turn
-SOLD_BUSES  = $3a               ; Number of businesses sold this turn
-VALUE       = $3b               ; Current property value
-ADJ_ST      = $3c               ; Adjacent structures bitfield
-HOME_COUNT  = $3d               ; Home Count
-EMP_COUNT   = $3e               ; Employer Count
-POP         = $3f               ; Population (2 bytes)
-YR_EXPEND   = $41               ; Previous year expenditure (2 bytes)
+PROGRESS    = $38               ; Progress Bar
+SOLD_HOME   = $39               ; Home was sold this turn, if 1
+SOLD_BUS    = $3a               ; Business was sold this turn, if 1
+SMART_COUNT = $3b               ; Count of Homes with nearby Schools
+HOME_COUNT  = $3c               ; Home Count
+EMP_COUNT   = $3d               ; Employer Count
+POP         = $3e               ; Population (2 bytes)
+COOR_X      = $40               ; x coordinate
+COOR_Y      = $41               ; y coordinate
+PAND_FL     = $42               ; Pandemic flag
 YR_REVENUE  = $43               ; Previous year revenue (2 bytes)
 DENOM       = $45               ; Happiness calculator register 1
 NUMER       = $46               ; Happiness calculator register 2 (2 bytes)
 QUAKE_FL    = $48               ; Earthquake flag
-SMART_COUNT = $49               ; Count of Homes with nearby Schools
-SMART       = $4a               ; Education (+0 - 9%)
-BUS_CAP     = $4b               ; Business Activity (2 bytes)
-BUS_CONF    = $4d               ; Business Confidence value
+VALUE       = $49               ; Current property value
+SMART       = $4b               ; Education (+0 - 9%)
+BUS_CAP     = $4c               ; Business Activity (2 bytes)
+BZCON_FL    = $4e               ; Business Confidence Low (bit 7 set)
+ADJ_ST      = $4f               ; Adjacent structures bitfield
 COL_PTR     = $f3               ; Screen color pointer (2 bytes)
-COOR_X      = $f9               ; x coordinate
-COOR_Y      = $fa               ; y coordinate
+YR_EXPEND   = $f9               ; Previous year expenditure (2 bytes)
 PTR         = $fb               ; Pointer (2 bytes)
 P_RAND      = $fd               ; Pseudorandom seed (2 bytes)
 TIME        = $ff               ; Jiffy counter
 
 ; Music Player Memory
-MUSIC_FL    = $4e               ; Bit 7 set if player is running
-MUSIC_REG   = $4f               ; Music shift register (4 bytes)
-MUSIC_TIMER = $53               ; Music timer
-MUSIC_MOVER = $54               ; Change counter
+MUSIC_FL    = $50               ; Bit 7 set if player is running
+MUSIC_REG   = $51               ; Music shift register (4 bytes)
+MUSIC_TIMER = $55               ; Music timer
+MUSIC_MOVER = $56               ; Change counter
 
 ; Game State
 YEAR        = $1ffa             ; Year (2 bytes)
@@ -249,9 +262,12 @@ Main:       lsr ACTION_FL       ; Turn off Action flag
             bne ch_load         ; ,,
             jmp TapeSave        ; ,,
 ch_load:    cpx #L_KEY          ; If "L" was pressed, load a city
-            bne ch_fire         ; ,,
+            bne ch_eot          ; ,,
             jmp TapeLoad        ; ,,
-ch_fire:    cpx #FIRE           ; Has fire been pressed?
+ch_eot:     cpx #F1             ; If F1 was pressed, end the year
+            bne ch_action       ; ,,
+            jmp NextTurn        ; ,,
+ch_action:  cpx #FIRE           ; Has fire been pressed?
             beq Action          ; If so, go to Action mode
             txa                 ; Move joystick direction to A and
             pha                 ;   save it for later
@@ -395,7 +411,7 @@ ISR:        inc TIME            ; Circumventing BASIC's clock, so advance it
             bit MISR_FL         ; Min-ISR, Handle only timer and music
             bmi isr_r           ;   ,,
             bit ACTION_FL       ; Flash cursor if in Action mode
-            bpl move_wind       ; If not in Action mode, move wind turbines
+            bpl animate         ; If not in Action, animate Wind Farms & Fire
             ldy #6              ; Default to blue
             lda #%00010000      ; Every 16 interrupts, flash the cursor
             and TIME            ; ,,
@@ -404,35 +420,33 @@ ISR:        inc TIME            ; Circumventing BASIC's clock, so advance it
 flash_cur:  tya                 ; ,,
             jsr SetColor        ; ,,
             jmp icons
-move_wind:  ldx #0
-            lda #%00011111      
-            bit TIME
-            bne svc_quake
-            bvc rotate
-            ldx #5
-rotate:     ldy #4
--loop:      lda WFAnim1,x
-            sta WindFarm+1,y
-            lda BurnAnim1,x
-            sta Burning+1,y
-            inx
-            dey
-            bpl loop
-svc_quake:  bit QUAKE_FL
-            bpl icons
--loop:      lda VICCR4          ; Do wait for raster to be at top, so that
+animate:    ldx #0              ; Handle animations of Wind Farms and Fire
+            lda #%00011111      ; Check to see if the time is nnn00000
+            bit TIME            ; ,,
+            bne svc_quake       ; If any of the first 5 bits are on, skip
+            bvc frame2          ; If bit 6 is on, use the second frame instead
+            ldx #5              ;   of the first
+frame2:     ldy #4              ; Change the top 5 bytes of the character
+-loop:      lda WFAnim1,x       ;   ,,
+            sta WindFarm+1,y    ;   ,, (the Wind Farm)
+            lda BurnAnim1,x     ;   ,,
+            sta Burning+1,y     ;   ,, (the Fire)
+            inx                 ; Get the next byte index
+            dey                 ; Decrement the update counter
+            bpl loop            ; ,,
+svc_quake:  bit QUAKE_FL        ; Is there an Earthquake in progress?
+            bpl icons           ;   If not, handle the flashing icons
+-loop:      lda VICCR4          ; Wait for raster to be at top, so that
             bne loop            ;   the earthquake isn't all rastery
-            lda HORIZ
-            eor #$01
-            sta HORIZ
-            jsr Rand15          ; Randomize volume for rumbling sound
-            sta VOLUME          ; ,,
-            jmp isr_r
+            lda HORIZ           ; Shake the ground by alternating the
+            eor #$01            ;   VIC horizontal direction register
+            sta HORIZ           ;   ,,
+            jsr Rand31          ; Randomize volume for rumbling sound
+            sta VOLUME          ;   (the extra bit doesn't matter here)
 icons:      bit TIME            ; Flash icons as warnings that Homes or
-            bmi def_icons       ;   Businesses are at risk of leaving.
-            lda BUS_CONF        ; If the population is insufficient to support
-            cmp #LOW_CONF       ;   area business, flash the Population icon
-            bne ch_happy        ;   ,,
+            bvc def_icons       ;   Businesses are at risk of leaving.
+            bit BZCON_FL        ; If the population is insufficient to support
+            bpl ch_happy        ;   area business, flash the Population icon
             lda #$21            ;   ,,
             sta SCREEN+22       ;   ,,
 ch_happy:   lda HAPPY           ; Check employment level
@@ -605,15 +619,15 @@ Roads:      lda COOR_X          ; Save cursor coordinates
             jsr CheckRoad       ; ,,
             rol TMP             ; TMP now contains the bitfield of directions
             jsr Coor2Ptr        ; Convert pointer to screen address
-            lda TMP             ; Get character
+            lda TMP             ; Bitfield is also the character code
             ldx #0              ; Store in screen address
             sta (PTR,x)         ; ,,
 next_cell:  jsr PlaceCol        ; Set the color of everything else
             inc COOR_Y          ; Continue iterating across all characters in   
             lda COOR_Y          ;   the maze
-            cmp #20             ;   ,,
+            cmp #HEIGHT         ;   ,,
             bne loop            ;   ,,
-            lda #$00            ;   ,,
+            lda #0              ;   ,,
             sta COOR_Y          ;   ,,
             inc COOR_X          ;   ,,
             lda COOR_X          ;   ,,
@@ -622,29 +636,28 @@ next_cell:  jsr PlaceCol        ; Set the color of everything else
             jmp ResetCoor       ; Reset coordinates
             
 ; Check Road
-; Carry is clear if the specified adjacent cell is a road
-CheckRoad:  pha
-            jsr MoveCoor
-            jsr CheckBound
-            bcs restore
-            jsr Coor2Ptr
-            ldx #0
-            lda (PTR,x)
-            tay
-            pla
-            eor #%00000010
-            jsr MoveCoor
-            cpy #$10
-            bcc is_road
-            clc
+; Carry is set if the specified adjacent cell is a road
+CheckRoad:  pha                 ; Store direction for later reversal
+            jsr MoveCoor        ; Move the coordinates in specified direction
+            jsr CheckBound      ; Is the new location in bounds?
+            bcs restore         ; If not, restore and return
+            jsr Coor2Ptr        ; Align pointer with new coordinate
+            ldx #0              ; Get the character at the pointer
+            lda (PTR,x)         ; ,,
+            tay                 ; Y is now the character
+            pla                 ; Get passed direction
+            jsr restore2
+            cpy #$10            ; Is the character a Road?
+            bcc is_road         ; If so, go set carry and return
+            clc                 ; If not, clear carry and return
+            rts                 ; ,,
+is_road:    sec                 ; Set carry when it's a Road
+            rts                 ; ,,
+restore:    pla                 ; Get passed direction
+restore2:   eor #%00000010      ; Reverse the passed direction
+            jsr MoveCoor        ; And set pointer to it
+            clc                 ; (Only relevant for return from CheckRoad)
             rts
-restore:    pla
-            eor #%00000010
-            jsr MoveCoor
-            clc
-            rts
-is_road:    sec
-            rts  
 
 ; Nearby Structures
 ; Follow all combinations of between 1 and 4 roads, starting from
@@ -744,7 +757,9 @@ next_adj:   dey                 ; Iterate through entire pattern
             rts
        
 ; Advance to Next Turn            
-NextTurn:   lda UNDER           ; Replace previous character
+NextTurn:   lda #254            ; Reset screen color
+            sta SCRCOL          ; ,,
+            lda UNDER           ; Replace previous character
             jsr Place           ; ,,
             inc YEAR            ; Increment year
             bne reset_ix        ; ,,
@@ -758,8 +773,9 @@ reset_ix:   lda #0              ; Reset build index
             sta BUS_CAP         ; ,,
             sta BUS_CAP+1       ; ,,
             jsr FiresOut        ; Put out last year's fires
-            jsr Tornado         ; Is there a tornado this year?
-            jsr Quake           ; Is there an earthquake this year????
+            jsr Tornado         ; Is there a Tornado this year?
+            jsr Quake           ; Is there an Earthquake this year????
+            jsr Pandemic        ; Is there a Pandemic this year?
             jsr Upkeep          ; Perform calculations and maintenance
             jsr Collect         ; Collect income
             jsr DrawStats       ; Draw the new stats bar
@@ -771,15 +787,15 @@ reset_ix:   lda #0              ; Reset build index
             pha                 ;   Homes with nearby Schools
             lda SMART           ; Temporarily add education to population
             jsr AddPop          ;   for Business Confidence calculation
-            ldy #HIGH_CONF      ; Calculate Business Confidence value
+            lsr BZCON_FL        ; Reset Business Confidence flag
             lda BUS_CAP         ; If the annual Business value is greater
             cmp POP             ;   than the population, it means that the
             lda BUS_CAP+1       ;   population cannot support Businesses
             sbc POP+1           ;   ,,
             bcc next_r          ; Population is high enough
-            ldy #LOW_CONF       ; Population is too low
-next_r:     sty BUS_CONF        ; Set the Business attrition value
-            pla                 ; Restore the original population
+            sec                 ; Population is too low, so set Business
+            ror BZCON_FL        ;   Confidence flag
+next_r:     pla                 ; Restore the original population
             sta POP+1           ; ,,
             pla                 ; ,,
             sta POP             ; ,,
@@ -885,9 +901,9 @@ next_dmg:   dey                 ; Go back for more destruction!
             jmp ResetCoor       ; Reset the coordinates  
 
 ; Handle Tornado Disaster            
-Tornado:    lda TornFreq        ; Get frequency of tornado in power of two
+Tornado:    lda TornFreq        ; Get frequency of Tornado in power of two
             jsr PRand           ; If this random check is 0, there's a
-            beq yes_tor         ;   tornado
+            beq yes_tor         ;   Tornado
             rts                 ; Otherwise, nothing happens
 yes_tor:    jsr MusicStop       ; ,,
             lda COOR_X          ; Save the current coordinates for later
@@ -899,7 +915,7 @@ yes_tor:    jsr MusicStop       ; ,,
             jsr FiresOut        ; Clear most of the remaining fires
             sec                 ; Turn on Min-ISR flag to disable fire animation
             ror MISR_FL         ; ,,
-            jsr RandCoor        ; Starting point of tornado
+            jsr RandCoor        ; Starting point of Tornado
             ldy #0              ; Increase volume
 -loop:      sty VOLUME          ; ,,
             lda #$f0            ; ,,
@@ -910,18 +926,18 @@ yes_tor:    jsr MusicStop       ; ,,
             cpy #10             ; ,,
             bne loop            ; ,,
             ldy #7              ; Temporarily replace the burning icon with
--loop:      lda TornIcon,y      ;   the tornado icon
+-loop:      lda TornIcon,y      ;   the Tornado icon
             sta Burning,y       ;   ,,
             dey                 ;   ,,
             bpl loop            ;   ,,
             ldy TornPath        ; ---- START PATH ---- Maximum path length
 -loop:      ldx #0              ; If there's a Lake at the new location, the
-            lda (PTR,x)         ;   tornado dissipates over the lake
+            lda (PTR,x)         ;   Tornado dissipates over the lake
             cmp #CHR_LAKE       ;   ,,
             beq tornado_r       ;   ,,
             lda #CHR_BURN       ; Place the damage on the screen
             jsr Place           ; ,,
-            ldx #7              ; Flash some lightning
+            ldx #6              ; Flash some lightning
 flashes:    lda VICCR4          ;     (Wait for raster to get to 0 before
             bne flashes         ;       changing screen color)
             lda TornScr,x       ;   Lightning
@@ -949,7 +965,7 @@ skip_back:  sta TMP             ; Store the new direction for backtrack check
             bne loop            ; ,,
 tornado_r:  ldy #$0a            ; Fade out the volume
 -loop:      sty VOLUME          ; ,,
-            cpy #8              ;   Turn the tornado icon back into the
+            cpy #8              ;   Turn the Tornado icon back into the
             bcs dec_vol         ;     burning icon
             lda BurnOrig,y      ;     ,,
             sta Burning,y       ;     ,,
@@ -957,58 +973,53 @@ dec_vol:    lda #5              ; ,,
             jsr Delay           ; ,,
             dey                 ; Continue fading volume
             bpl loop            ; ,,
-            lda #0              ; Cut off the tornado noise
+            lda #0              ; Cut off the Tornado noise
             sta NOISE           ; ,,
             lsr MISR_FL         ; Turn Min-ISR flag off for animations
-            lda #254            ; Restore proper screen color
-            sta SCRCOL          ; ,,
             jmp ResetCoor       ; Reset coordinates
+
+; Handle Pandemic disaster            
+Pandemic:   lda PandFreq        ; Get frequency of Pandemic in power of two
+            jsr PRand           ; If this random check is 0, there's a
+            beq yes_pand        ;   tornado
+            lsr PAND_FL         ; Turn off Pandemic flag
+            rts                 ; Otherwise, nothing happens
+yes_pand:   lda #255            ; Turn the border yellow during the Pandemic
+            sta SCRCOL          ;   year upkeep
+            sec                 ; Turn on Pandemic flag
+            ror PAND_FL         ; ,,
+            rts
                                      
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; UPKEEP ROUTINES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Upkeep
-; Iterate through all map cells
-;   - For Homes, calculate tax base and add to Treasury
-;   - For unprotected Homes, there's a chance of fire
-;   - For Businesses, calculate tax base and add to Treasury
-;   - For unprotected Businesses, there's a chance of fire
-;   - For Wind Farms, Firehouses, Clinics, and Schools,
-;     subtract maintenance from Treasury
-;   - If maintenance cannot be paid, there's a chance of fire
-;   - For unoccupied Homes and Businesses, calculate chance of
-;     conversion of occupied
-Upkeep:     jsr ClrInfo         ; Clear status bar
-            lda #0              ; Reset sold Home and Business counters
-            sta SOLD_HOMES      ;   which are used to limit new
-            sta SOLD_BUSES      ;   occupancy
-            sta HOME_COUNT      ; Reset Home count
-            sta EMP_COUNT       ; Reset employer count
-            sta SMART_COUNT     ; Reset smart Home count
-            sta POP             ; Reset population for recalculation
-            sta POP+1           ; ,,
-            lda COOR_X          ; Save cursor coordinates
+; Iterate through all map cells from left to right, starting at a pseudorandom
+; column. 
+Upkeep:     lda COOR_X          ; Save cursor coordinates
             pha                 ; ,,
             lda COOR_Y          ; ,,
             pha                 ; ,,
-            lda #$00            ; Start at the top left corner of the board
-            sta COOR_Y          ; ,,
-            sta PROGRESS        ; Reset Progress Bar
+            jsr ClrInfo         ; Clear status bar
+            lda #0              ; Reset sold Home and Business counters
+            ldx #9              ; There are some values all stored together that
+-loop:      sta PROGRESS,x      ;   need to be reset to 0 at the beginning of
+            dex                 ;   the Upkeep
+            bpl loop            ;   ,,
 rand_x:     jsr Rand31          ; Get random location 0-31
             cmp #22             ; If it's not a good X coordinate range,
             bcs rand_x          ;   get another one
             sta COOR_X          ;   ,,
 -loop:      jsr Coor2Ptr        ; Get the character at the pointer
             ldx #$00            ; ,,
-            lda (PTR,x)         ; ,,          
+            lda (PTR,x)         ; ,,   
+            bmi next_map        ; Skip reverse chars from scenario generator    
             cmp #CHR_UHOME      ; Handle UNOCCUPIED HOME
             bne ch_ubus         ; ,,
-            jsr SellHome
-            jmp next_map
+            jmp SellHome
 ch_ubus:    cmp #CHR_UBUS       ; Handle UNOCCUPIED_BUSINESS
             bne ch_home
-            jsr SellBus
-            jmp next_map
+            jmp SellBus
 ch_home:    cmp #CHR_HOME       ; Handle HOME
             bne ch_bus          ; ,,
             jsr CompHome        ; Compute Home
@@ -1024,7 +1035,7 @@ ch_maint:   cmp #CHR_WIND       ; Pay maintenance for maintainable
             jsr Maint           ;   ,,
 next_map:   inc COOR_Y
             lda COOR_Y
-            cmp #20
+            cmp #HEIGHT
             bne loop
             lda #0
             sta COOR_Y
@@ -1064,19 +1075,16 @@ maint_r:    rts
 ; For an unoccupied Home at the coordinate, see if it qualifies for
 ; occupancy
 ; Rules - If the unoccupied Home has a nearby Wind Farm, it can sell
-SellHome:   lda HAPPY           ; If the satisfaction is below the
-            cmp #EMP_THRESH     ;   threshhold, no additional Homes
-            bcc sellh_r         ;   will sell
-            lda SOLD_HOMES      ; If a Home was sold this turn, return
+SellHome:   lda SOLD_HOME       ; If a Home was sold this turn, return
             bne sellh_r         ; ,,
             jsr Nearby          ; A Home must have a nearby Wind Farm
             and #BIT_WIND       ; ,,
             beq sellh_r         ; ,,
             lda #CHR_HOME       ; Place the Home
             jsr Place           ; ,,
-            inc SOLD_HOMES      ; Increment sell count
-            jmp populate        ; Add population to Home & add Home count
-sellh_r:    rts
+            inc SOLD_HOME       ; Increment sell count
+            jsr populate        ; Add population to Home & add Home count
+sellh_r:    jmp next_map
 
 ; Sell Business
 ; For an unoccupied business at the coordinate, see if it qualifies for
@@ -1084,14 +1092,10 @@ sellh_r:    rts
 ; Rules - An unoccupied Business cannot sell without a nearby Wind Farm
 ;       - If the unoccupied Business is adjacent to a Business, it can sell
 ;       - If the unoccupied Business has a nearby Home, it can sell
-SellBus:    lda #BUS_CONF       ; If Business Confidence is low, new
-            cmp #LOW_CONF       ;   Business will not move in
-            beq sellb_r         ;   ,,
-            lda SOLD_BUSES      ; If a business was sold this turn, return
+SellBus:    bit BZCON_FL        ; If Business Confidence is low, new
+            bmi sellb_r         ;   Businesses will not move in
+            lda SOLD_BUS        ; If a business was sold this turn, return
             bne sellb_r         ; ,,
-            lda BUS_CONF        ; If the business climate is unfavorable,
-            cmp #LOW_CONF       ;   the Business will not sell
-            beq sellb_r         ;   ,,
             jsr Nearby          ; A business must have a nearby Wind Farm
             lda #BIT_WIND       ;   to sell
             bit NEARBY_ST       ;   ,,
@@ -1107,9 +1111,9 @@ SellBus:    lda #BUS_CONF       ; If Business Confidence is low, new
             beq sellb_r         ; Otherwise, it does not sell yet
 sold_bus:   lda #CHR_BUS        ; Place sold Business on screen
             jsr Place           ; ,,
-            inc SOLD_BUSES      ; Increment sell count
+            inc SOLD_BUS        ; Increment sell count
             inc EMP_COUNT       ; Increment employer count
-sellb_r:    rts
+sellb_r:    jmp next_map
 
 ; Compute Home
 ; - Determine whether the family leaves or stays
@@ -1119,11 +1123,9 @@ CompHome:   jsr Nearby          ; Get nearby structures
             lda #BIT_WIND       ; Is there a Wind Farm nearby?
             bit NEARBY_ST       ; ,,
             bne ch_hfire        ; If so, go to next check
-            jsr Rand3           ; If not, there's a 1 in 4 chance that
-            bne ch_hfire        ;   occupants move out
-            lda #CHR_UHOME      ; Otherwise, they move out
+            lda #CHR_UHOME      ; If not, occupants move out
             jmp Place           ; ,,
-ch_hfire:   jsr FireRisk        ; Handle fire risk
+ch_hfire:   jsr CatchFire       ; Handle fire risk
             bcs comph_r         ; ,,
 ch_emp:     lda HAPPY           ; Check satisfaction against employment
             cmp #EMP_THRESH     ;   threshhold
@@ -1135,6 +1137,8 @@ ch_emp:     lda HAPPY           ; Check satisfaction against employment
 ch_hclinic: lda #BIT_CLINIC     ; Is there a Clinic nearby?
             bit NEARBY_ST       ; ,,
             beq ch_hschool      ; ,,
+            bit PAND_FL         ; Skip the Clinic population bonus in a
+            bne ch_hschool      ;   Pandemic year
             lda #1              ; A nearby Clinic adds to 1 a Home's
             jsr AddPop          ;   population
 ch_hschool: lda #BIT_SCHOOL     ; Is there a School nearby?
@@ -1144,8 +1148,15 @@ ch_hschool: lda #BIT_SCHOOL     ; Is there a School nearby?
 hrevenue:   lda #CHR_HOME       ; Assess Home property value
             jsr Assess          ; ,,
             jsr Revenue         ; Add property value to Treasury
-populate:   jsr Rand3           ; Add people to each Home (3-6)
-            clc                 ; ,,
+            lda #BIT_CLINIC     ; If there's a clinic, go to healthy
+            bit NEARBY_ST       ;   population increase
+            bne healthy         ;   ,,
+populate:   bit PAND_FL         ; Is there a Pandemic going on?
+            bpl healthy         ;   If not, go to normal population
+            lda #0              ; If this Home is affected by the Pandemic,
+            beq sick            ;   it loses the random 0-3 population
+healthy:    jsr Rand3           ; Add people to each Home (3-6)
+sick:       clc                 ; ,,
             adc #3              ; ,,
             jsr AddPop          ; ,,
             inc HOME_COUNT      ; Count Homes
@@ -1155,26 +1166,21 @@ comph_r:    rts
 ; - Determine whether the Business leaves or stays
 ; - Assess the Business value
 ; - Add the tax revenue from the Business
-CompBus:    lda BUS_CONF        ; Do population-based confidence test
-            jsr PRand           ; Every so often, a Business just
-            bne bus_near        ;   closes up shop and leaves. This is
-            lda #CHR_UBUS       ;   just the nature of Businesses.
-            jmp Place           ;   ,,
+CompBus:    bit BZCON_FL        ; Do population-based confidence test
+            bpl bus_near        ; Confidence is okay, proceed to next check
+            jsr Rand7           ; If confidence is low, there's a 1 in 8 chance
+            beq bus_leave       ;   that the business leaves
 bus_near:   jsr Nearby          ; Get nearby structures
             lda #BIT_WIND       ; Is there a Wind Farm nearby?
             bit NEARBY_ST       ; ,,
-            bne ch_bfire        ; If so, go to next check
-            jsr Rand3           ; If not, there's a 1 in 4 chance that
-            bne ch_bfire        ;   the Business moves out
-            lda #CHR_UBUS       ;   ,,
+            bne ch_broad        ; If so, go to next check
+bus_leave:  lda #CHR_UBUS       ; If not, business moves out
             jmp Place           ;   ,,
-ch_bfire:   jsr FireRisk        ; Handle fire risk
-            bcs compbus_r       ; ,,
 ch_broad:   lda #BIT_ROAD       ; Does the Business still have an
             bit ADJ_ST          ;   adjacent road?
-            bne brevenue        ;   ,,
-            lda #CHR_UBUS       ; If not, the Business always moves out
-            jmp Place           ;   ,,
+            beq bus_leave       ; If not, it moves right out
+            jsr CatchFire       ; Handle fire risk
+            bcs compbus_r       ; ,,
 brevenue:   lda #CHR_BUS        ; Assess Business property value
             jsr Assess          ; ,,
             jsr Revenue         ; Add property value to Treasury
@@ -1187,16 +1193,17 @@ brevenue:   lda #CHR_BUS        ; Assess Business property value
             inc BUS_CAP+1       ;   ,,
 compbus_r:  rts  
 
-; Handle Fire Risk
+; Handle Risk of Catching Fire
 ; For Homes and Businesses, the same
 ; Assumes Coordinate and NEARBY_ST are set
 ; Carry is set if the structure has been destroyed by fire
-FireRisk:   lda #BIT_FIRE       ; Is there a nearby Firehouse?
+CatchFire:  lda #BIT_FIRE       ; Is there a nearby Firehouse?
             bit NEARBY_ST       ; ,,
             bne fire_r          ; If so, no risk
-            jsr Rand31          ; Otherwise roll a 32-sided die (about 3% 
-            bne fire_r          ;   per year per property)
-            lda #CHR_BURN       ; Burn it down!
+            lda FireRisk        ; Get the fire risk parameter (default is
+            jsr PRand           ;   1 in 32)
+            bne fire_r          ;   ,,
+            lda #CHR_BURN       ; Otherwise, burn it down!
             jmp Place           ; CARRY IS SET by Place if not a Road
 fire_r:     clc
             rts   
@@ -1208,15 +1215,15 @@ fire_r:     clc
 ; are set correctly.
 Assess:     ldy #0              ; Initialize value
             sty VALUE           ; ,,
-            ldy #<BusVals       ; Set assessment table
+            ldy #<BusNVals      ; Set assessment table
             sty TMP_PTR         ; ,,
-            ldy #>BusVals       ; ,,
+            ldy #>BusNVals      ; ,,
             sty TMP_PTR+1       ; ,,
             cmp #CHR_HOME       ; ,,
             bne assess_st       ; ,,
-            ldy #<HomeVals      ; Override assessment table
+            ldy #<HomeNVals     ; Override assessment table
             sty TMP_PTR         ; ,,
-            ldy #>HomeVals      ; ,,
+            ldy #>HomeNVals     ; ,,
             sty TMP_PTR+1       ; ,,
 assess_st:  lda NEARBY_ST       ; Use nearby structures as the current
             sta CURR_ST         ;   assessment type
@@ -1269,7 +1276,7 @@ no_fire:    inc COOR_X
             bne loop
             inc COOR_Y
             lda COOR_Y
-            cmp #20
+            cmp #HEIGHT
             beq f_out_r
             lda #0
             sta COOR_X
@@ -1310,11 +1317,7 @@ Rand3:      lda #%01000000      ; 2-bit
             .byte $3c
 Rand7:      lda #%00100000      ; 3-bit
             .byte $3c
-Rand15:     lda #%00010000      ; 4-bit
-            .byte $3c
 Rand31:     lda #%00001000      ; 5-bit
-            .byte $3c
-Rand255:    lda #%00001000      ; 8-bit            
 PRand:      sta RNDNUM
 -loop:      lsr P_RAND
             ror P_RAND+1
@@ -1355,8 +1358,11 @@ found_dir:  lda KEYDOWN         ; Key current keypress
             bne ch_L            ; ,,
             ldx #S_KEY+1        ; ,, (will be 5 after DEX below)
 ch_L:       cmp #21             ; "L" for Load
-            bne control_r       ; ,,
+            bne ch_f1           ; ,,
             ldx #L_KEY+1        ; ,, (will be 6 after DEX below)
+ch_f1:      cmp #39             ; F1 for End Year
+            bne control_r       ; ,,
+            ldx #F1+1           ; ,, (will be 7 after DEX below)
 control_r:  dex                 ; dex to maybe set zero flag
             rts
             
@@ -1420,7 +1426,7 @@ CheckBound: lda COOR_X          ; Check X coordinate for <0
             bcs out             ; ,,
             lda COOR_Y          ; Check Y coordinate for <0
             bmi out             ; ,,
-            cmp #20             ; Check Y coordinate for >19
+            cmp #HEIGHT         ; Check Y coordinate
             bcs out             ; ,,
             rts                 ; Return with carry clear (in)
 out:        sec                 ; Return with carry set (out)
@@ -1574,13 +1580,11 @@ Setup:      lda #254            ; Set background color
             sta MUSIC_FL        ; Clear Music Play flag
             lda #$ff            ; Set custom character location
             sta VICCR5          ; ,,
-            lda #$fe            ; Prepare for new waveform
-            sta VOICEH          ; ,,
             lda #$7f            ; Set DDR to read East
             sta VIA2DD          ; ,,
             lda #$80            ; Disable Commodore-Shift
             sta CASECT          ; ,,
-            lda TIME            ; Seed random number generator
+            lda $a2             ; Seed random number generator
             ora #$01            ; ,,
             sta P_RAND          ; ,,
             lda VIATIME         ; ,,
@@ -1609,8 +1613,7 @@ InitGame:   lda #<Header        ; Show Board Header
             sta HOME_COUNT      ; Initialize counts
             sta EMP_COUNT       ; ,,
             sta SMART_COUNT     ; ,,
-            sta TIME            ; Initialize timer
-            sta BUS_CONF        ; Starting Business Attrition value
+            sta BZCON_FL        ; Starting Business Confidence flag
             sta MISR_FL         ; Turn off Min-ISR flag
             lda StartTreas      ; Set initial treasury amount
             sta TREASURY        ; ,,
@@ -1630,8 +1633,8 @@ InitGame:   lda #<Header        ; Show Board Header
             sta COOR_X          ; ,,
             sta COOR_Y          ; ,,
             jsr DrawStats       ; Show stats in header
-            ldy #21             ; Set status bar color to blue
-            lda #6              ; ,,
+            lda #6              ; Set Info Bar color to blue
+            ldy #21             ; ,,
 -loop:      sta COLOR+44,y      ; ,,
             dey                 ; ,,
             bpl loop            ; ,,
@@ -1640,9 +1643,7 @@ InitGame:   lda #<Header        ; Show Board Header
             
 ; Next Quake Year
 ; The next earthquake is predestined 
-NextQuake:  lda #0
-            sta QUAKE_YR
-            lda QuakeMarg
+NextQuake:  lda QuakeMarg
             jsr PRand
             clc
             adc QuakeFreq
@@ -1675,20 +1676,21 @@ musicsh:    asl MUSIC_REG       ; Shift 32-bit register left
             sta MUSIC_REG       ; ,,
             dec MUSIC_MOVER     ; When this counter hits 0, alter the music
             bne FetchNote       ;   by flipping bit 0 of each byte in the
-            ldy #3              ;   shift register
+            jsr Rand3           ;   shift register
+            tay                 ;   ,,
 -loop:      lda MUSIC_REG,y     ;   ,,
             eor #$01            ;   ,,
             sta MUSIC_REG,y     ;   ,,
             dey                 ;   ,,
             bpl loop            ;   ,,
-            lda MUSIC_REG+2
-            lsr
-            ora #%00000001
-            sta MUSIC_MOVER     ; 
-FetchNote:  lda #10             ; Reset the timer
+            lda MUSIC_REG+2     ; Reset the mover by an amount determined
+            lsr                 ;   by a register byte
+            ora #%00000001      ;   ,,
+            sta MUSIC_MOVER     ;   ,,
+FetchNote:  lda #TEMPO          ; Reset the timer
             sta MUSIC_TIMER     ; ,,
             bit MUSIC_REG       ; A high note played when bit 7 of byte 0 is
-            bpl play_high       ;   cleear
+            bpl play_high       ;   clear
             lda #0              ; Otherwise, silence the high voice 
             sta VOICEH          ; ,,
             beq play_low        ; 
@@ -1703,9 +1705,9 @@ play_low:   lda MUSIC_REG+1     ; Play the middle register, same byte as the
             tay                 ; Y is the mode degree index
             lda Mode,y          ; ,,
             sta VOICEM          ; Set mid voice
-set_vol:    lda MUSIC_REG+3
-            and #$0f
-            sta VOLUME
+set_vol:    lda MUSIC_REG+3     ; Set the starting volume based on one of the
+            and #$0f            ;   registers. It will be reduced by one per
+            sta VOLUME          ;   ISR cycle until 0
 music_r:    rts
 
 ; Stop Music
@@ -1715,34 +1717,33 @@ MusicStop:  lsr MUSIC_FL
             sta VOICEH
             rts
 
-; Play Music            
-MusicPlay:  sec
-            ror MUSIC_FL
-            rts
-
 ; Initialize Music
 MusicInit:  ldy #3
 -loop:      lda Theme,y
             sta MUSIC_REG,y
             dey
             bpl loop
-            sec
-            ror MUSIC_FL
             lda #0
             sta VOLUME
             sta MUSIC_MOVER
-            jmp FetchNote
+            jsr FetchNote
+            ; Fall through to MusicPlay
+
+; Play Music            
+MusicPlay:  sec
+            ror MUSIC_FL
+            rts
             
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; TAPE SAVE/LOAD
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-TapeSave:   lda #250            ; Red border for Save
-            sta SCRCOL          ; ,,
+TapeSave:   ldx #209            ; Record icon
+            stx SCREEN+64       ; ,,
+            lda #250            ; Screen/Border color (red border)
             jsr TapeSetup       ; Set up tape
             beq TapeClnup       ; STOP was pressed
-            lda BUS_CONF        ; Store Business Confidence and Satisfaction
-            asl                 ;   in a single composite location for save,
-            ora HAPPY           ;   to allow all important state data to fit
+            lda BZCON_FL        ; Store Business Confidence and Satisfaction
+            ora HAPPY           ;   in a single value to allow key state to be
             sta HAP_BIZCON      ;   in the six bytes above the screen memory
             ldx #1              ; Device number
             ldy #0              ; Command (none)
@@ -1761,12 +1762,12 @@ TapeSave:   lda #250            ; Red border for Save
             jsr SAVE            ; SAVE
 TapeClnup:  lda #254            ; Return screen color to normal
             sta SCRCOL          ; ,,
-            jsr MusicPlay       ; Restart music
+            jsr ClrPrompt       ; Clear tape prompts
+            jsr MusicInit       ; Restart music
             jmp new_pos         ; Return from tape operation        
 
 ; Tape Load
-TapeLoad:   lda #253            ; Green border for Load
-            sta SCRCOL          ; ,,
+TapeLoad:   lda #253            ; Screen/Border color (green border)
             jsr TapeSetup       ; Set up tape
             beq TapeClnup       ; STOP was pressed
             ldx #1              ; Tape device number
@@ -1783,10 +1784,9 @@ TapeLoad:   lda #253            ; Green border for Load
             pha                 ; Save because using it twice
             and #%00001111      ; Isolate HAPPY and store
             sta HAPPY           ; ,,
-            pla                 ; Get the composite back for Business Confidence
+            pla                 ; Isolate BZCON_FL and store
             and #%11110000      ; ,,
-            lsr                 ; Shift it back to the actual value and store
-            sta BUS_CONF        ; ,,
+            sta BZCON_FL        ; ,,
             jsr Roads           ; Re-colorize the world
             jmp TapeClnup       ; Clean up the operation
 
@@ -1796,7 +1796,10 @@ TapeLoad:   lda #253            ; Green border for Load
 ; - Changes screen border color to green
 ; - Waits for tape button activation or STOP
 ; Returns with Z=1 if operation is canceled
-TapeSetup:  lda UNDER           ; Clear the Cursor out of the way
+TapeSetup:  sta TMP             ; Save the screen color
+            ldx #$3f
+            stx SCREEN+65       ; Show indicator icon
+            lda UNDER           ; Clear the Cursor out of the way
             jsr Place           ; ,,
             lda #0              ; Turn off some stuff
             sta $91             ;   STOP isn't down
@@ -1808,8 +1811,11 @@ TapeSetup:  lda UNDER           ; Clear the Cursor out of the way
             cmp #$18            ; ,,
             bne wait            ; ,,
             rts                 ; Return from caller with Z=1
-rolling:    lda #255            ; Yellow border for rolling tape
-            sta SCRCOL          ; ,,
+rolling:    lda TMP             ; Pull the screen color
+            sta SCRCOL          ;   and set it
+ClrPrompt:  lda #$20            ; Clear the tape prompt icons
+            sta SCREEN+64       ; ,,
+            sta SCREEN+65       ; ,,
             rts                 ; Return from caller with Z=0
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1862,9 +1868,9 @@ BitChr:     .byte CHR_WIND,CHR_SCHOOL,CHR_FIRE,CHR_CLINIC,CHR_PARK
 CarPatt:    .byte 21,2,21,0
 
 ; Tornado thunder and lightning patterns
-TornScr:    .byte 254, 15,255,  8,254, 14,  8,  8
-TornFlash:  .byte 20,   2,  2,  9,  3,  6,  8, 10
-TornThun:   .byte $ff,$ff,$f4,$f6,$f6,$f4,$f2,$f0
+TornScr:    .byte 254, 14,254, 14, 15,  8, 14
+TornFlash:  .byte   3,  8,  2, 20,  2,  8,  8
+TornThun:   .byte $ff,$f0,$f3,$f5,$f3,$f0,$ef
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; CUSTOM CHARACTER SET
@@ -1956,4 +1962,4 @@ Burning:    .byte $00,$10,$18,$3c,$6e,$ee,$cc,$78  ; $2f Burned Down
             .byte $cf,$d7,$d7,$11,$5d,$5b,$03,$ff  ; $3c Satisfaction
             .byte $83,$ff,$ab,$ff,$ab,$ff,$ab,$ff  ; $3d Calendar
             .byte $ff,$ff,$bb,$f7,$ef,$df,$bb,$ff  ; $3e Percent Sign
-            .byte $3c,$42,$a5,$81,$a5,$99,$42,$3c  ; (Clobbered by MODPACK load)
+            .byte $00,$60,$78,$7e,$7e,$78,$60,$00  ; $3f Play Icon
