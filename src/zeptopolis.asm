@@ -64,7 +64,7 @@ HomeAVals:  .byte $ff,       1,      $ff,       $ff,    1,    $fe,   $ff
 ; Fire Risk configuration
 ; This is the annual risk of an unprotected property (Home or Business) burning
 ; down. It is expressed as a carry at a specific bit value.
-FireRisk:   .byte %00010000
+FireRisk:   .byte %00001000
 
 ; Earthquake configuration
 ; The next Earthquake will happen QuakeFreq years from now, plus 0-7
@@ -197,7 +197,8 @@ MUSIC_FL    = $10               ; Bit 7 set if player is running
 MUSIC_TIMER = $11               ; Music timer
 MUSIC_MOVER = $12               ; Change counter
 
-; Game State
+; Game State Memory
+; Things that must be saved to tape
 PAND_YR     = $1ff7             ; Years until next Pandemic
 PAND_COUNT  = $1ff8             ; Pandemic countdown
 BZCON_FL    = $1ff9             ; Business Confidence flag
@@ -260,7 +261,10 @@ Welcome:    ldx #$fb            ; Reset stack for NMI restart
 Main:       lsr ACTION_FL       ; Turn off Action flag
 -wait:      jsr Controls        ; Wait for game controls
             bmi wait            ; ,,
-            cpx #S_KEY          ; If "S" was pressed, save the city
+            bit MUSIC_FL        ; Start music on first movement
+            bmi ch_save         ; ,,
+            jsr MusicInit       ; ,,            
+ch_save:    cpx #S_KEY          ; If "S" was pressed, save the city
             bne ch_load         ; ,,
             jmp TapeSave        ; ,,
 ch_load:    cpx #L_KEY          ; If "L" was pressed, load a city
@@ -297,11 +301,8 @@ new_pos:    jsr DrawCursor      ; Draw the new cursor
 ;   - Build
 ;   - Cancel
 ;   - Finish turn            
-Action:     bit MUSIC_FL        ; Start music on first action
-            bmi a_debounce      ; ,,
-            jsr MusicInit       ; ,,
-a_debounce: jsr Controls        ; Debounce the joystick before entering
-            bmi a_debounce      ; ,,
+Action:     jsr Controls        ; Debounce the joystick before entering
+            bmi Action          ; ,,
             sec                 ; Set Action flag
             ror ACTION_FL       ; ,,
             lda UNDER           ; Get character at cursor
@@ -378,7 +379,7 @@ ch_dup:     clc                 ; If the built character is the same as the
             lda UpdateCost      ; Use the update cost instead
 buy:        jsr Spend           ; Try to do the spend
             bcs cancel          ; ,,
-            jsr DrawStats       ; Update Treasury amount
+            jsr DrawTreas       ; Update Treasury amount
             lda BUILD_IX
             cmp #IDX_ROAD       ; If the player is building a road,
             bne reg_item        ;   
@@ -542,7 +543,7 @@ DrawStats:  ldy #1              ; Plot population display
             lda #$21            ; Space for population decrease
             jsr CHROUT          ; ,,
             ; TREASURY
-            ldy #7              ; Plot treasury display
+DrawTreas:  ldy #7              ; Plot treasury display
             ldx #1              ; ,,
             clc                 ; ,,
             jsr PLOT            ; ,,
@@ -884,7 +885,7 @@ yes_quake:  jsr MusicStop
             beq next_dmg        ; ,,
             lda #CHR_BURN       ; Place damage on screen
             jsr Place           ; ,,
-            lda #50             ; Delay during the shaking
+            lda #30             ; Delay during the shaking
             jsr Delay           ; ,,
 next_dmg:   dey                 ; Go back for more destruction!
             bne loop            ; ,,
@@ -1016,7 +1017,6 @@ rand_x:     jsr Rand31          ; Get random location 0-31
 -loop:      jsr Coor2Ptr        ; Get the character at the pointer
             ldx #$00            ; ,,
             lda (PTR,x)         ; ,,   
-            bmi next_map        ; Skip reverse chars from scenario generator    
             cmp #CHR_UHOME      ; Handle UNOCCUPIED HOME
             bne ch_ubus         ; ,,
             jmp SellHome
@@ -1202,14 +1202,16 @@ compbus_r:  rts
 ; Carry is set if the structure has been destroyed by fire
 CatchFire:  lda #BIT_FIRE       ; Is there a nearby Firehouse?
             bit NEARBY_ST       ; ,,
-            bne fire_r          ; If so, no risk
+            bne no_risk         ; If so, no risk
             lda FireRisk        ; Get the fire risk parameter (default is
             jsr PRand           ;   1 in 32)
-            bne fire_r          ;   ,,
+            bne no_risk         ;   ,,
             lda #CHR_BURN       ; Otherwise, burn it down!
-            jmp Place           ; CARRY IS SET by Place if not a Road
-fire_r:     clc
-            rts   
+            jsr Place           ; ,,
+            sec                 ; Set Carry to indicate the property was
+            rts                 ;   destroyed
+no_risk:    clc                 ; Clear Carry to indicate that the property
+            rts                 ;   survived
                          
 ; Assess Home or Business Value
 ; A is CHR_HOME or CHR_BUS
@@ -1451,16 +1453,16 @@ RandCoor:   jsr Rand31          ; Get random location 0-31
 ; Place Character
 ; In A, at PTR location
 ; Then set color from Colors table
-; NOTE! Carry is set if the structure isn't a Road. FireRisk relies on this
-;       behavior, so if it changes, also revisit FireRisk
 Place:      ldx #0              ; Place the item at the screen location
             sta (PTR,x)         ; ,,
 PlaceCol:   cmp #$10            ; Handle color lookup, with special case
             bcs lookup_col      ;   for roads
             lda #COL_ROAD       ;   ,,
             jmp SetColor        ;   ,,
-lookup_col: tax                 ; Look up the color in the table by screen
-            lda Colors-$23,x    ;   code
+lookup_col: tax                 ; X is screen code
+            bpl col_table       ; If char >= $80, the character is from
+            ldx #0              ;   scenario generator. Use Road index
+col_table:  lda Colors-$23,x    ; Look up the color in the table by screen code
             ; Fall through to SetColor
 
 ; Set Color
@@ -1475,7 +1477,7 @@ SetColor:   pha
             ldx #0
             pla
             sta (COL_PTR,x)
-            rts
+setcol_r:   rts
             
 ; Get Happiness
 ; Basically an employment percentage from 10% to 90%
@@ -1574,13 +1576,7 @@ Hex2Deci:   lda #$00
 ; Set up hardware
 Setup:      lda #44             ; Set 22-character screen height
             sta VICCR3          ;
-            lda #0              ; Turn off sound registers
-            sta NOISE           ; ,, 
-            sta VOICEL          ; ,,
-            sta VOICEM          ; ,,
-            sta VOLUME          ; ,,
-            sta ACTION_FL       ; Clear Action flag
-            sta MUSIC_FL        ; Clear Music Play flag
+            lsr ACTION_FL       ; Clear Action flag
             lda #$ff            ; Set custom character location
             sta VICCR5          ; ,,
             lda #$7f            ; Set DDR to read East
@@ -1597,6 +1593,7 @@ Setup:      lda #44             ; Set 22-character screen height
             sta NMINV           ; ,, 
             lda #>Welcome       ; ,,
             sta NMINV+1         ; ,,
+            jsr MusicStop       ; Zero out sound registers
 InstallISR: sei                 ; Install the custom ISR
             lda #<ISR           ; ,,
             sta CINV            ; ,,
@@ -1688,16 +1685,15 @@ musicsh:    asl MUSIC_REG       ; Shift 32-bit register left
             ora MUSIC_REG       ; And put that back at the beginning
             sta MUSIC_REG       ; ,,
             dec MUSIC_MOVER     ; When this counter hits 0, alter the music
-            bne FetchNote       ;   by flipping bit 0 of each byte in the
-            ldy #3              ;   shift register
--loop:      lda MUSIC_REG,y     ;   ,,
+            bne FetchNote       ;   by flipping bit 0 of registers 1 and 3
+            lda MUSIC_REG+1     ;   ,,
             eor #$01            ;   ,,
-            sta MUSIC_REG,y     ;   ,,
-            dey
-            dey                 ;   ,,
-            bpl loop            ;   ,,
-            lda #$7f            ; Reset music mover timer
-            sta MUSIC_MOVER     ;   ,,
+            sta MUSIC_REG+1     ;   ,,
+            lda MUSIC_REG+3     ;   ,,
+            eor #$01            ;   ,,
+            sta MUSIC_REG+3     ;   ,,
+            lda #$7f            ; Reset the mover for a little less than 4 loops
+            sta MUSIC_MOVER     ;   per pattern so it goes longer without repeat
 FetchNote:  lda #TEMPO          ; Reset the timer
             sta MUSIC_TIMER     ; ,,
             bit MUSIC_REG       ; A high note played when bit 7 of byte 0 is
@@ -1723,17 +1719,19 @@ music_r:    rts
 
 ; Stop Music
 MusicStop:  lsr MUSIC_FL
-            lda #0
-            sta VOICEM
-            sta VOICEH
+            lda #0              ; Clear sound registers
+            sta NOISE           ; ,, 
+            sta VOICEL          ; ,,
+            sta VOICEM          ; ,,
+            sta VOLUME          ; ,,
             rts
 
 ; Initialize Music
-MusicInit:  ldy #3
--loop:      lda Theme,y
-            sta MUSIC_REG,y
-            dey
-            bpl loop
+MusicInit:  ldy #3              ; Really, X would normally be used as the index
+-loop:      lda Theme,y         ;   because there's a ZP,X mode. But the
+            sta MUSIC_REG,y     ;   Control subroutine returns X, and using Y
+            dey                 ;   here avoids having to keep track of that at
+            bpl loop            ;   the cost of one extra byte for ABS,Y
             lda #0
             sta VOLUME
             sta MUSIC_MOVER
@@ -1771,7 +1769,7 @@ TapeSave:   ldx #209            ; Record icon
 TapeClnup:  lda #254            ; Return screen color to normal
             sta SCRCOL          ; ,,
             jsr ClrPrompt       ; Clear tape prompts
-            jsr MusicInit       ; Restart music
+            jsr MusicPlay       ; Restart music
             jmp new_pos         ; Return from tape operation        
 
 ; Tape Load
@@ -1870,7 +1868,7 @@ CarPatt:    .byte 21,2,21,0
 
 ; Tornado thunder and lightning patterns
 TornScr:    .byte 254, 14,254, 14, 15,  8, 14
-TornFlash:  .byte   3,  8,  2, 20,  2,  8,  8
+TornFlash:  .byte  15,  6,  3, 15,  2,  6,  6
 TornThun:   .byte $ff,$f0,$f3,$f5,$f3,$f0,$ef
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
