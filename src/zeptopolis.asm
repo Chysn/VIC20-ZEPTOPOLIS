@@ -222,6 +222,7 @@ HAPPY       = $1fff             ; Satisfaction (10% - 90%)
 CINV        = $0314             ; ISR vector
 NMINV       = $0318             ; Release NMI vector
 ;-NMINV     = $fffe             ; Development NMI non-vector (uncomment for dev)
+IBSOUT      = $0326             ; CHROUT vector
 SCREEN      = $1e00             ; Screen character memory (unexpanded)
 BOARD       = SCREEN+66         ; Starting address of board
 COLOR       = $9600             ; Screen color memory (unexpanded)
@@ -237,9 +238,8 @@ VOICEL      = $900a             ; Low sound register
 NOISE       = $900d             ; Noise register
 VOLUME      = $900e             ; Sound volume register/aux color
 SCRCOL      = $900f             ; Screen color
-VIA1DD      = $9113             ; Data direction register for joystick
 VIA1PA      = $9111             ; Joystick port (up, down, left, fire)
-VIA1PA2		= $911F		        ; VIA 1 DRA, no handshake
+VIA1DD      = $9113             ; Data direction register for joystick
 VIA2PB      = $9120             ; Joystick port (for right)
 VIA2DD      = $9122             ; Data direction register for joystick
 CASECT      = $0291             ; Disable Commodore case
@@ -252,6 +252,7 @@ PRTSTR      = $cb1e             ; Print from data (Y,A)
 PRTFIX      = $ddcd             ; Decimal display routine (A,X)
 PLOT        = $fff0             ; Position cursor 
 CHROUT      = $ffd2             ; Write one character
+CHROUT_VEC  = $f27a             ; Original contents of IBSOUT
 SETLFS      = $ffba             ; Setup logical file
 SETNAM      = $ffbd             ; Setup file name
 SAVE        = $ffd8             ; Save
@@ -1723,12 +1724,12 @@ set_vol:    lda MUSIC_REG+3     ; Set the starting volume based on one of the
 music_r:    rts
 
 ; Stop Music
-MusicStop:  lsr MUSIC_FL
-            lda #0              ; Clear sound registers
-            sta NOISE           ; ,, 
-            sta VOICEL          ; ,,
-            sta VOICEM          ; ,,
-            sta VOLUME          ; ,,
+MusicStop:  lsr MUSIC_FL        ; Turn off Music flag
+            ldy #4              ; Clear sound registers $900a-$900e
+            lda #0              ; ,,
+-loop:      sta VOICEL,y        ; ,,
+            dey                 ; ,,
+            bpl loop            ; ,,
             rts
 
 ; Initialize Music
@@ -1771,10 +1772,10 @@ TapeSave:   ldx #209            ; Record icon
             iny                 ; 512 bytes
             iny                 ; ,,
             jsr SAVE            ; SAVE
-TapeClnup:  lda #$7a            ; Put CHROUT back to normal
-            sta $0326           ; ,,
-            lda #$f2            ; ,,
-            sta $0327           ; ,,
+TapeClnup:  lda #<CHROUT_VEC    ; Put CHROUT back to normal
+            sta IBSOUT          ; ,,
+            lda #>CHROUT_VEC    ; ,,
+            sta IBSOUT+1        ; ,,
             lda #254            ; Return screen color to normal
             sta SCRCOL          ; ,,
             lda PAND_COUNT      ; If there's a Pandemic in progress, the border
@@ -1808,10 +1809,10 @@ TapeLoad:   lda #253            ; Screen/Border color (green border)
 ; - Waits for tape button activation or STOP
 ; Returns with Z=1 if operation is canceled
 TapeSetup:  sta TMP             ; Save the screen color
-            lda #<LONE_RTS      ; Redirect CHROUT to a lone RTS
-            sta $0326           ;   to suppress prompts
-            lda #>LONE_RTS      ;   ,,
-            sta $0327           ;   ,,
+            lda #<DEV_NULL      ; Redirect CHROUT to a lone RTS
+            sta IBSOUT          ;   to suppress prompts
+            lda #>DEV_NULL      ;   ,,
+            sta IBSOUT+1        ;   ,,
             ldx #$3f            ; Show "Play" icon always
             stx SCREEN+65       ; ,,
             stx $91             ; STOP isn't held down
@@ -1829,7 +1830,7 @@ rolling:    lda TMP             ; Pull the screen color
 ClrPrompt:  lda #$20            ; Clear the tape prompt icons
             sta SCREEN+64       ; ,,
             sta SCREEN+65       ; ,,
-LONE_RTS:   rts                 ; Return from caller with Z=0
+DEV_NULL:   rts                 ; Return from caller with Z=0
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; DATA TABLES
