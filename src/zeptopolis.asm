@@ -97,6 +97,17 @@ EMP_THRESH  = 7                 ; Employment threshhold
 TEMPO       = 10                ; Music tempo (lower is faster)
 HEIGHT      = 19                ; Maximum Y position
 
+; Color Constants
+; So I don't need to remember them anymore
+BLACK       = 0
+WHITE       = 1
+RED         = 2
+CYAN        = 3
+PURPLE      = 4
+GREEN       = 5
+BLUE        = 6
+YELLOW      = 7
+
 ; Character Constants
 CHR_PROG    = $f8               ; Progress Bar
 CHR_CURSOR  = $22               ; Cursor
@@ -115,18 +126,18 @@ CHR_BURN    = $2f               ; Burned down
 CHR_POP     = $3a               ; Population icon
 CHR_THUMB   = $3c               ; Happiness icon
 
-; Color Constants
-COL_CURSOR  = 6                 ; Cursor, blue
-COL_ROAD    = 0                 ; Road, black
-COL_UNOCC   = 0                 ; Unoccupied properties, black
-COL_OCC     = 0                 ; Occupied properties, black
-COL_SCHOOL  = 4                 ; School, purple
-COL_WIND    = 4                 ; Wind Farm, purple
-COL_FIRE    = 2                 ; Firehouse, red
-COL_CLINIC  = 6                 ; Clinic, blue
-COL_PARK    = 5                 ; Park, green
-COL_LAKE    = 6                 ; Lake, blue
-COL_BURN    = 2                 ; Burned Down, red
+; Character Color Constants
+COL_CURSOR  = BLUE              ; Cursor, blue
+COL_ROAD    = BLACK             ; Road, black
+COL_UNOCC   = BLACK             ; Unoccupied properties, black
+COL_OCC     = BLACK             ; Occupied properties, black
+COL_SCHOOL  = PURPLE            ; School, purple
+COL_WIND    = PURPLE            ; Wind Farm, purple
+COL_FIRE    = RED               ; Firehouse, red
+COL_CLINIC  = BLUE              ; Clinic, blue
+COL_PARK    = GREEN             ; Park, green
+COL_LAKE    = BLUE              ; Lake, blue
+COL_BURN    = RED               ; Burned Down, red
 
 ; Index and Bit Value Constants
 IDX_ROAD    = 1
@@ -140,6 +151,7 @@ BIT_BUS     = %01000000
 BIT_ROAD    = %10000000
 
 ; Directional Constants
+; Output values for Control, and input values for MoveCoor
 NORTH       = 0
 EAST        = 1
 SOUTH       = 2
@@ -147,7 +159,6 @@ WEST        = 3
 FIRE        = 4
 S_KEY       = 5                 ; "S" has been pressed (Save)
 L_KEY       = 6                 ; "L" has been pressed (Load)
-F1          = 7                 ; F1 has been pressed (End Year)
 
 ; Game Memory
 UNDER       = $00               ; Character under pointer
@@ -228,8 +239,9 @@ VOLUME      = $900e             ; Sound volume register/aux color
 SCRCOL      = $900f             ; Screen color
 VIA1DD      = $9113             ; Data direction register for joystick
 VIA1PA      = $9111             ; Joystick port (up, down, left, fire)
-VIA2DD      = $9122             ; Data direction register for joystick
+VIA1PA2		= $911F		        ; VIA 1 DRA, no handshake
 VIA2PB      = $9120             ; Joystick port (for right)
+VIA2DD      = $9122             ; Data direction register for joystick
 CASECT      = $0291             ; Disable Commodore case
 VIATIME     = $9114             ; VIA 1 Timer 1 LSB
 POWERSOF2   = $8270             ; Bit value at index (character ROM)
@@ -246,6 +258,7 @@ SAVE        = $ffd8             ; Save
 LOAD        = $ffd5             ; Load
 ISCNTC      = $ffe1             ; Check Stop key
 CS10        = $f8ab             ; Check tape switches
+HOME        = $e581             ; Home cursor
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; MAIN PROGRAM
@@ -268,11 +281,8 @@ ch_save:    cpx #S_KEY          ; If "S" was pressed, save the city
             bne ch_load         ; ,,
             jmp TapeSave        ; ,,
 ch_load:    cpx #L_KEY          ; If "L" was pressed, load a city
-            bne ch_eot          ; ,,
-            jmp TapeLoad        ; ,,
-ch_eot:     cpx #F1             ; If F1 was pressed, end the year
             bne ch_action       ; ,,
-            jmp NextTurn        ; ,,
+            jmp TapeLoad        ; ,,
 ch_action:  cpx #FIRE           ; Has fire been pressed?
             beq Action          ; If so, go to Action mode
             txa                 ; Move joystick direction to A and
@@ -381,9 +391,9 @@ buy:        jsr Spend           ; Try to do the spend
             bcs cancel          ; ,,
             jsr DrawTreas       ; Update Treasury amount
             lda BUILD_IX
-            cmp #IDX_ROAD       ; If the player is building a road,
-            bne reg_item        ;   
-            lda #%11011110      ;   character offset for placeholder.
+            cmp #IDX_ROAD       ; If the player is building a road...
+            bne reg_item        ;
+            lda #%11011110      ;   ...character offset for placeholder
 reg_item:   clc                 ; Show the item at the cursor
             adc #CHR_CURSOR     ; ,,
             sta UNDER           ; ,,
@@ -983,13 +993,12 @@ dec_vol:    lda #5              ; ,,
 Pandemic:   lda PAND_COUNT      ; Is there a Pandemic currenly in progress?
             bpl yes_pand        ; ,,
             dec PAND_YR         ; Count down years until Pandemic
-            beq st_pand         ; Is it time? Go to Start
-            rts                 ; Otherwise, nothing happens
+            bne pscr_r          ; Is it time? If not, return
 st_pand:    jsr Rand3           ; Pandemic is starting
             sta PAND_COUNT      ; Set the countdown (how long it will last)
 pand_scr:   lda #255            ; Screen border to yellow
             sta SCRCOL          ; ,,
-            rts
+pscr_r:     rts
 yes_pand:   dec PAND_COUNT      ; Pandemic in progress, set screen color
             bpl pand_scr        ; ,,
             jmp NextPand
@@ -1355,19 +1364,16 @@ Controls:   lda VIA1PA          ; Read VIA1 port
             ldx #5              ; Check five directions (incl. fire)
 -loop:      lda JoyTable,x      ; Is the joystick pointed in the
             bit TMP             ;   direction indexed by X?
-            bne found_dir       ; If so, set that as the joystick direction
+            bne control_r       ; If so, set that as the joystick direction
             dex                 ; Loop back until found, or 0
             bne loop            ; ,,
-found_dir:  lda KEYDOWN         ; Key current keypress
+ch_S:       lda KEYDOWN         ; Key current keypress
             cmp #41             ; "S" for Save
             bne ch_L            ; ,,
             ldx #S_KEY+1        ; ,, (will be 5 after DEX below)
 ch_L:       cmp #21             ; "L" for Load
-            bne ch_f1           ; ,,
-            ldx #L_KEY+1        ; ,, (will be 6 after DEX below)
-ch_f1:      cmp #39             ; F1 for End Year
             bne control_r       ; ,,
-            ldx #F1+1           ; ,, (will be 7 after DEX below)
+            ldx #L_KEY+1        ; ,, (will be 6 after DEX below)
 control_r:  dex                 ; dex to maybe set zero flag
             rts
             
@@ -1432,8 +1438,7 @@ CheckBound: lda COOR_X          ; Check X coordinate for <0
             lda COOR_Y          ; Check Y coordinate for <0
             bmi out             ; ,,
             cmp #HEIGHT         ; Check Y coordinate
-            bcs out             ; ,,
-            rts                 ; Return with carry clear (in)
+            rts                 ; Set is out, clear is in
 out:        sec                 ; Return with carry set (out)
             rts                 ; ,,
             
@@ -1458,7 +1463,7 @@ Place:      ldx #0              ; Place the item at the screen location
 PlaceCol:   cmp #$10            ; Handle color lookup, with special case
             bcs lookup_col      ;   for roads
             lda #COL_ROAD       ;   ,,
-            jmp SetColor        ;   ,,
+            bcc SetColor        ; Branch always, as Carry is clear here
 lookup_col: tax                 ; X is screen code
             bpl col_table       ; If char >= $80, the character is from
             ldx #0              ;   scenario generator. Use Road index
@@ -1467,16 +1472,16 @@ col_table:  lda Colors-$23,x    ; Look up the color in the table by screen code
 
 ; Set Color
 ; In A, at color location corresponding to PTR
-SetColor:   pha
-            lda PTR
-            sta COL_PTR
-            lda PTR+1
-            and #$03
-            ora #>COLOR
-            sta COL_PTR+1
-            ldx #0
-            pla
-            sta (COL_PTR,x)
+SetColor:   pha                 ; A is the color
+            lda PTR             ; But before I can make use of that, I need to
+            sta COL_PTR         ;   set a color pointer. This is the same
+            lda PTR+1           ;   method used by BASIC to set the color
+            and #$03            ;   pointer from a screen pointer
+            ora #>COLOR         ;   ,,
+            sta COL_PTR+1       ;   ,,
+            ldx #0              ; Now set the saved color in the color address
+            pla                 ; ,,
+            sta (COL_PTR,x)     ; ,,
 setcol_r:   rts
             
 ; Get Happiness
@@ -1496,10 +1501,10 @@ GetHappy:   lda #9             ; Default to 9 if there are more Homes than
             sed
             ldy HOME_COUNT      ; Home count is the denominator
             jsr Hex2Deci        ; Convert to decimal
-            sty DENOM           ;   and store
+            sta DENOM           ;   and store
             ldy EMP_COUNT       ; Employer count is numerator
             jsr Hex2Deci        ;   Convert to decimal
-            sty NUMER           ;   And store
+            sta NUMER           ;   And store
             jsr Divide          ; Multiply NUMER by 10
             cld
             clc                 ; Add quotient to HAPPY
@@ -1525,10 +1530,10 @@ GetSmart:   lda #0              ; Starting default
             bne smart_r         ;   ,,
 do_div:     sed
             jsr Hex2Deci        ; Convert to decimal
-            sty DENOM           ;   and store
+            sta DENOM           ;   and store
             ldy SMART_COUNT     ; Number of smart Homes
             jsr Hex2Deci        ; Convert to decimal
-            sty NUMER           ;   and store
+            sta NUMER           ;   and store
             jsr Divide          ; Perform division
             cld
             clc                 ; Add the quotient to the numeral
@@ -1561,13 +1566,13 @@ sub_div:    lda NUMER+1         ; If the numerator goes below 0, division is
             rts
 
 ; Hex to Decimal
-; For decimal mode conversion               
-Hex2Deci:   lda #$00
--loop:      clc
-            adc #$01
-            dey
-            bne loop
-            tay
+; For decimal mode conversion of a hex number in Y
+; Return the decimal number in A
+Hex2Deci:   lda #$00            ; Initialize return value
+-loop:      clc                 ; Add one to A for each Y. When A hits $0a,
+            adc #$01            ;   it'll instead increment the high nybble
+            dey                 ;   as the 10s place
+            bne loop            ;   ,,
             rts            
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1576,14 +1581,14 @@ Hex2Deci:   lda #$00
 ; Set up hardware
 Setup:      lda #44             ; Set 22-character screen height
             sta VICCR3          ;
-            lsr ACTION_FL       ; Clear Action flag
+            lsr ACTION_FL       ; Clear Action flag (before ISR starts)
             lda #$ff            ; Set custom character location
             sta VICCR5          ; ,,
             lda #$7f            ; Set DDR to read East
             sta VIA2DD          ; ,,
             lda #$80            ; Disable Commodore-Shift
             sta CASECT          ; ,,
-            lda $a2             ; Seed random number generator
+            lda TIME            ; Seed random number generator
             ora #$01            ; ,,
             sta P_RAND          ; ,,
             lda VIATIME         ; ,,
@@ -1766,9 +1771,16 @@ TapeSave:   ldx #209            ; Record icon
             iny                 ; 512 bytes
             iny                 ; ,,
             jsr SAVE            ; SAVE
-TapeClnup:  lda #254            ; Return screen color to normal
+TapeClnup:  lda #$7a            ; Put CHROUT back to normal
+            sta $0326           ; ,,
+            lda #$f2            ; ,,
+            sta $0327           ; ,,
+            lda #254            ; Return screen color to normal
             sta SCRCOL          ; ,,
-            jsr ClrPrompt       ; Clear tape prompts
+            lda PAND_COUNT      ; If there's a Pandemic in progress, the border
+            bmi no_pand         ;   color needs to be yellow instead of blue,
+            inc SCRCOL          ;   so just increase by one. Convenient!
+no_pand:    jsr ClrPrompt       ; Clear tape prompts
             jsr MusicPlay       ; Restart music
             jmp new_pos         ; Return from tape operation        
 
@@ -1796,17 +1808,19 @@ TapeLoad:   lda #253            ; Screen/Border color (green border)
 ; - Waits for tape button activation or STOP
 ; Returns with Z=1 if operation is canceled
 TapeSetup:  sta TMP             ; Save the screen color
-            ldx #$3f
-            stx SCREEN+65       ; Show indicator icon
+            lda #<LONE_RTS      ; Redirect CHROUT to a lone RTS
+            sta $0326           ;   to suppress prompts
+            lda #>LONE_RTS      ;   ,,
+            sta $0327           ;   ,,
+            ldx #$3f            ; Show "Play" icon always
+            stx SCREEN+65       ; ,,
+            stx $91             ; STOP isn't held down
             lda UNDER           ; Clear the Cursor out of the way
             jsr Place           ; ,,
-            lda #0              ; Turn off some stuff
-            sta $91             ;   STOP isn't down
-            sta $9d             ;   Make sure control messages are off
             jsr MusicStop       ; Stop music during tape
 -wait:      jsr CS10            ; Check for Record/Play
             beq rolling         ; ,,
-            lda KEYDOWN         ; Check for Stop key
+            lda KEYDOWN         ; Check for STOP key
             cmp #$18            ; ,,
             bne wait            ; ,,
             rts                 ; Return from caller with Z=1
@@ -1815,7 +1829,7 @@ rolling:    lda TMP             ; Pull the screen color
 ClrPrompt:  lda #$20            ; Clear the tape prompt icons
             sta SCREEN+64       ; ,,
             sta SCREEN+65       ; ,,
-            rts                 ; Return from caller with Z=0
+LONE_RTS:   rts                 ; Return from caller with Z=0
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; DATA TABLES
