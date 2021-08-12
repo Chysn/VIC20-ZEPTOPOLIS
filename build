@@ -7,3 +7,17 @@ c1541 -format zeptopolis,8 d64 vic/zeptopolis.d64 -write vic/zeptopolis.prg
 
 cat toc | grep pre_charset
 
+# Modpacks
+xa -o ./vic/easy.bin ./src/modpack-easy.asm
+printf "\x0d\x10" | cat - ./vic/easy.bin > ./vic/easy.mod
+
+xa -o ./vic/disaster.bin ./src/modpack-disaster.asm
+printf "\x0d\x10" | cat - ./vic/disaster.bin > ./vic/disaster.mod
+
+xa -o ./vic/homes.bin ./src/modpack-homes.asm
+printf "\x0d\x10" | cat - ./vic/homes.bin > ./vic/homes.mod
+
+# Add Modpacks to TAP file
+rm ./vic/modpack/modpacks.tap
+cbm-shell @./cbmshell/makemods
+

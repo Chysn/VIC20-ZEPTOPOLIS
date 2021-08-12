@@ -1,0 +1,6 @@
+attach ./vic/modpack/modpacks.tap
+copy --type PRG ./vic/easy.mod 0:EASY.MOD
+copy --type PRG ./vic/disaster.mod 0:DISASTER.MOD
+copy --type PRG ./vic/homes.mod 0:HOMES.MOD
+quit
+

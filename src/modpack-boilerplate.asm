@@ -7,23 +7,26 @@
 ; Assembled with XA
 ;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
+; ABOUT THIS MODPACK
 ; {MODPACK description}
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 * = $100d            
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; MODPACK TABLES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; The following tables can be used to modify the behavior of the game, to make
-; game balance harder or easier. Save a set of 57 bytes to the MODPACK address,
-; and load using the in-game "L" city load option.
+; game balance harder or easier. Set the values below and assemble the set of
+; bytes to $100d. Load using the in-game "L" city load option.
 
 ; Musical Mode
 ; Dorian         
 Mode:       .byte 147,159,163,175,183,191,195,201         
 
 ; Musical Theme
+; Tempo is number of 60th of a second between rotations
 Theme:      .byte $33,$44,$55,$66
+Tempo:      .byte 10
 
 ; Starting conditions
 StartYear:  .word 2021
