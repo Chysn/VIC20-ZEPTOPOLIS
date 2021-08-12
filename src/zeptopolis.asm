@@ -239,13 +239,15 @@ NOISE       = $900d             ; Noise register
 VOLUME      = $900e             ; Sound volume register/aux color
 SCRCOL      = $900f             ; Screen color
 VIA1PA      = $9111             ; Joystick port (up, down, left, fire)
-VIA1DD      = $9113             ; Data direction register for joystick
+VIA1DD      = $9113             ; Data direction register for tape
 VIA2PB      = $9120             ; Joystick port (for right)
 VIA2DD      = $9122             ; Data direction register for joystick
+VIA1PA2     = $911f             ; VIA 1 DRA, no handshake
 CASECT      = $0291             ; Disable Commodore case
 VIATIME     = $9114             ; VIA 1 Timer 1 LSB
 POWERSOF2   = $8270             ; Bit value at index (character ROM)
 KEYDOWN     = $c5               ; Key held down
+MSGFLG      = $9d               ; KERNAL message mode flag,
 
 ; System Resources - Routines
 PRTSTR      = $cb1e             ; Print from data (Y,A)
@@ -325,7 +327,7 @@ ch_space:   cmp #$20            ; If there's already something else there,
             beq show            ;   intentional development. Fire is
             ldx #0              ;   considered "nothing else there."
             stx BUILD_IX        ;   ,,
-            jsr DrawInfo        ; Show info about this structure
+            jsr DrawDetail      ; Show info about this structure
 show:       lda BUILD_IX        ; Show the structure being selected
             clc                 ; ,,
             adc #CHR_CURSOR     ; ,,
@@ -369,7 +371,10 @@ action_d:   bne show            ; Go back to show item
 Build:      asl ACTION_FL       ; Prevents ISR flash from messing up screen
 -debounce:  jsr Controls        ; Debounce joystick for build
             bpl debounce        ; ,,
-            ldy #9              ; Clear right-hand part of Info Bar
+            lda UNDER           ; Remove the cursor
+            jsr Place           ; ,,
+            jsr Roads           ; Clear the Road trace
+clr_det:    ldy #9              ; Clear right-hand part of Detail Bar
             lda #$20            ; ,,
 -loop:      sta SCREEN+56,y     ; ,,
             dey                 ; ,,
@@ -405,8 +410,6 @@ reg_item:   clc                 ; Show the item at the cursor
             sta UNDER           ;   and set that as UNDER. Don't show the
             jmp Main            ;   cursor until moved.
 cancel:     lda UNDER
-            jsr Place
-            lda UNDER
             cmp #$20
             bne to_main
             jsr DrawCursor
@@ -708,9 +711,13 @@ skip_ch:    lda CURR_DIR        ; Current direction for the move
             ldx #0              ; Is this step on a road?
             lda (PTR,x)         ; ,,
             cmp #$10            ; ,,
-            bcc sh_step         ; If not, allow only Wind Farms to be added for
+            bcc do_trace        ; If not, allow only Wind Farms to be added for
             lda #BIT_WIND       ;   this pattern, as Wind Farms may be in range
             sta BUILD_MASK      ;   without being connected by road.
+do_trace:   bit BUILD_MASK      ; Skip the trace if only looking at Wind Farms
+            bpl sh_step         ; ,,
+            lda #PURPLE         ; Change color of Road 
+            jsr SetColor        ; ,,
 sh_step:    lsr STEPS           ; Shift to the next step, two bits right
             lsr STEPS           ; ,,
             dec STEP_COUNT      ; Decrement step count
@@ -792,7 +799,9 @@ reset_ix:   lda #0              ; Reset build index
             jsr Collect         ; Collect income
             jsr DrawStats       ; Draw the new stats bar
             jsr DrawBudget      ; Show the previous year's budget
+            jsr Roads           ; Re-colorize the Roads
             jsr DrawCursor      ; Put the cursor back
+            jsr MusicPlay       ; Music may have stopped during a disaster
             lda POP             ; ---- BUSINESS CONFIDENCE ----
             pha                 ; Start by temporarily increasing
             lda POP+1           ;   Population by the percentage of
@@ -811,14 +820,19 @@ next_r:     pla                 ; Restore the original population
             sta POP+1           ; ,,
             pla                 ; ,,
             sta POP             ; ,,
-            jsr MusicPlay       ; Music may have stopped during a disaster
             jmp Main  
             
-; Draw Info
+; Draw Detail Bar
 ; - If the structure has a maintenance cost, show that
 ; - If the structure is a Home or Business, show estimated revenue
 ; - If the strucutre has no maintenance cost, show structures nearby           
-DrawInfo:   lda UNDER           ; If the structure under the cursor
+DrawDetail: cmp #$10            ; If the structure is a Road, do nothing
+            bcc detail_r        ; ,,
+            sec                 ; Set ISR to minimum, so that
+            ror MISR_FL         ;   cursor flashes don't cause problems
+            jsr Nearby          ; Trace Roads for this position
+            lsr MISR_FL         ; Turn off Min-ISR flag
+            lda UNDER           ; If the structure under the cursor
             cmp #CHR_WIND       ;   has no maintenance cost,
             bcc struct          ;   then go to the structure display
             cmp #CHR_PARK+1     ;   ,,
@@ -843,9 +857,7 @@ u10:        clc                 ; ,,
             tax                 ; ,,
             lda #0              ; ,,
             jmp PRTFIX          ; ,,
-struct:     sec                 ; Set ISR to minimum, so that
-            ror MISR_FL         ;   cursor flashes don't cause problems
-            jsr Nearby          ;   during the Nearby routine
+struct:     lda NEARBY_ST       ; Get nearby structures stored by Trace
             sta TMP             ; Use TMP for structure list
             ldy #0              ; Y is the bit index
             ldx #7              ; X is the screen position
@@ -858,21 +870,20 @@ skip_pos:   iny                 ; Move to the next bit
             cpy #7              ; ,,
             bne loop            ; ,,
             lda UNDER           ; Get character at pointer for additional info
-            cmp #CHR_HOME
-            beq show_val
-            cmp #CHR_BUS
-            bne struct_r            
-show_val:   jsr Assess
-            lda #$3b            ; Coin symbol
-            sta SCREEN+63       ; ,,
-            lda #$1f            ; Plus sign
-            sta SCREEN+64       ; ,,
-            lda VALUE  
-            clc
-            adc #$30            ; Convert value into a numeral
-            sta SCREEN+65     
-struct_r:   lsr MISR_FL         ; Turn off Min-ISR flag
-            rts 
+            cmp #CHR_HOME       ; If it's an occupied Home or Business, show
+            beq show_val        ;   the assessed value
+            cmp #CHR_BUS        ;   ,,
+            bne detail_r        ;   ,,
+show_val:   jsr Assess          ;   ,,
+            lda #$3b            ;   Coin symbol
+            sta SCREEN+63       ;   ,,
+            lda #$1f            ;   Plus sign
+            sta SCREEN+64       ;   ,,
+            lda VALUE           ;   ,,
+            clc                 ;   ,,
+            adc #$30            ;   Convert value into a numeral
+            sta SCREEN+65       ;   Store it to the screen
+detail_r:   rts 
       
 ; Handle Earthquake Disaster            
 Quake:      dec QUAKE_YR
@@ -930,9 +941,9 @@ yes_tor:    jsr MusicStop       ; ,,
             jsr RandCoor        ; Starting point of Tornado
             ldy #0              ; Increase volume
 -loop:      sty VOLUME          ; ,,
-            lda #$f0            ; ,,
+            lda #$e8            ; ,,
             sta NOISE           ; ,,
-            lda #10             ; ,,
+            lda #13             ; ,,
             jsr Delay           ; ,,
             iny                 ; ,,         
             cpy #10             ; ,,
@@ -949,17 +960,18 @@ yes_tor:    jsr MusicStop       ; ,,
             beq tornado_r       ;   ,,
             lda #CHR_BURN       ; Place the damage on the screen
             jsr Place           ; ,,
-            ldx #6              ; Flash some lightning
-flashes:    lda VICCR4          ;     (Wait for raster to get to 0 before
-            bne flashes         ;       changing screen color)
-            lda TornScr,x       ;   Lightning
-            sta SCRCOL          ;   ,,
-            lda TornThun,x      ;   Thunder
-            sta NOISE           ;   ,,
-            lda TornFlash,x     ;   Delay
-            jsr Delay           ;   ,,
-            dex                 ; Do next flash
-            bpl flashes         ; ,,
+            inc NOISE           ; Increase pitch of Tornado
+            ldx #5              ; Flash some lightning
+flashes:    lda VICCR4          ; ,,
+            bne flashes         ; ,,
+            lda SCRCOL          ; ,,
+            eor #%11110000      ; ,,
+            sta SCRCOL          ; ,,
+            txa                 ; Slight delay
+            asl                 ; ,,
+            jsr Delay           ; ,,
+            dex
+            bpl flashes          
 tor_dir:    jsr Rand3           ; Pick a random direction
             cpy TornPath        ; If this is the first iteration, don't check
             beq skip_back       ;   for backtracking
@@ -975,7 +987,9 @@ skip_back:  sta TMP             ; Store the new direction for backtrack check
             jsr Coor2Ptr        ; Convert coordinate to pointer
             dey                 ; Iterate through TornPath damage area
             bne loop            ; ,,
-tornado_r:  ldy #$0a            ; Fade out the volume
+tornado_r:  lda #$ff            ; Fade out with thunder
+            sta NOISE           ; ,,
+            ldy #$0a            ; Fade out the volume
 -loop:      sty VOLUME          ; ,,
             cpy #8              ;   Turn the Tornado icon back into the
             bcs dec_vol         ;     burning icon
@@ -985,8 +999,9 @@ dec_vol:    lda #5              ; ,,
             jsr Delay           ; ,,
             dey                 ; Continue fading volume
             bpl loop            ; ,,
-            lda #0              ; Cut off the Tornado noise
-            sta NOISE           ; ,,
+            lda #254            ; Reset screen color
+            sta SCRCOL          ; ,,
+            jsr MusicStop       ; Stop noise register
             lsr MISR_FL         ; Turn Min-ISR flag off for animations
             jmp ResetCoor       ; Reset coordinates
 
@@ -1772,10 +1787,7 @@ TapeSave:   ldx #209            ; Record icon
             iny                 ; 512 bytes
             iny                 ; ,,
             jsr SAVE            ; SAVE
-TapeClnup:  lda #<CHROUT_VEC    ; Put CHROUT back to normal
-            sta IBSOUT          ; ,,
-            lda #>CHROUT_VEC    ; ,,
-            sta IBSOUT+1        ; ,,
+TapeClnup:  asl VIA1DD          ; Restore data direction register
             lda #254            ; Return screen color to normal
             sta SCRCOL          ; ,,
             lda PAND_COUNT      ; If there's a Pandemic in progress, the border
@@ -1808,29 +1820,30 @@ TapeLoad:   lda #253            ; Screen/Border color (green border)
 ; - Changes screen border color to green
 ; - Waits for tape button activation or STOP
 ; Returns with Z=1 if operation is canceled
-TapeSetup:  sta TMP             ; Save the screen color
-            lda #<DEV_NULL      ; Redirect CHROUT to a lone RTS
-            sta IBSOUT          ;   to suppress prompts
-            lda #>DEV_NULL      ;   ,,
-            sta IBSOUT+1        ;   ,,
+TapeSetup:  sta TMP
             ldx #$3f            ; Show "Play" icon always
             stx SCREEN+65       ; ,,
-            stx $91             ; STOP isn't held down
             lda UNDER           ; Clear the Cursor out of the way
             jsr Place           ; ,,
             jsr MusicStop       ; Stop music during tape
--wait:      jsr CS10            ; Check for Record/Play
-            beq rolling         ; ,,
+-wait:      bit VIA1PA2         ; Is tape switch activated?
+            bvc rolling         ;   If so, roll tape
             lda KEYDOWN         ; Check for STOP key
             cmp #$18            ; ,,
             bne wait            ; ,,
             rts                 ; Return from caller with Z=1
-rolling:    lda TMP             ; Pull the screen color
+rolling:    lda #$00            ; set all DRA lines low
+            sta	VIA1PA2         ; set VIA 1 DRA
+	        sta	MSGFLG          ; disable KERNAL messages
+            sta $91             ; Stop isn't held down
+            lda	#%11000000      ; OOIIIIII, set cassette switch to output
+            sta	VIA1DD          ; ,,
+            lda TMP             ; Pull the screen color
             sta SCRCOL          ;   and set it
 ClrPrompt:  lda #$20            ; Clear the tape prompt icons
             sta SCREEN+64       ; ,,
             sta SCREEN+65       ; ,,
-DEV_NULL:   rts                 ; Return from caller with Z=0
+            rts                 ; Return from caller with Z=0
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; DATA TABLES
@@ -1880,11 +1893,6 @@ BitChr:     .byte CHR_WIND,CHR_SCHOOL,CHR_FIRE,CHR_CLINIC,CHR_PARK
                                     
 ; Search pattern for adjacent search, starting from index 3 (PTR minus 22)
 CarPatt:    .byte 21,2,21,0
-
-; Tornado thunder and lightning patterns
-TornScr:    .byte 254, 14,254, 14, 15,  8, 14
-TornFlash:  .byte  15,  6,  3, 15,  2,  6,  6
-TornThun:   .byte $ff,$f0,$f3,$f5,$f3,$f0,$ef
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; CUSTOM CHARACTER SET
