@@ -1,0 +1,7 @@
+xa -l toc-cart -o ./vic/zeptopolis-cart.tmp ./src/zeptopolis-cart.asm
+cat ./vic/zeptopolis-cart.tmp ./tools/padding8k.bin | head -c 8192 > ./vic/zeptopolis-cart.bin
+rm ./vic/zeptopolis-cart.tmp
+printf "\x00\xa0" | cat - ./vic/zeptopolis-cart.bin > ./vic/zeptopolis-cart.prg
+cp ./vic/zeptopolis-cart.prg ~/vic20/zep-cart
+cat toc-cart | grep CodeEnd
+

@@ -1,6 +1,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;
-;                                  ZEPTOPOLIS
+;                               ZEPTOPOLIS DELUXE
+;                             Cartridge Adaptation
 ;                            (c)2021, Jason Justian
 ;                  
 ; Assembled with XA
@@ -14,77 +15,12 @@
 ;
 ; https://creativecommons.org/licenses/by-nc/4.0/legalcode.txt
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; BASIC LAUNCHER
+; CARTRIDGE LAUNCHER
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; This is the tokenization of the following BASIC program, which
-; runs this game
-;     42 SYS4167
-* = $1001
-Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$36
-            .byte $38,$00,$00,$00
-            
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; MODPACK TABLES
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; See modpack-boilerplate.asm for more information.
-
-; Musical Mode
-; Dorian         
-Mode:       .byte 147,159,163,175,183,191,195,201         
-
-; Musical Theme
-Theme:      .byte $33,$44,$55,$66
-Tempo:      .byte 10
-
-; Starting conditions
-StartYear:  .word 2021
-StartTreas: .word 500
-LakeCount:  .byte 6
-
-; Build costs
-NewDevCost: .byte 5
-UpdateCost: .byte 10
-
-; Yearly maintenance costs of maintainable structures
-;                 Wind Farm,School, Firehouse, Clinic, Park
-MaintCosts: .byte 5,        15,     10,        10,     1
-
-; Assessed values for NEARBY structures ($ff = -1)
-;                 Wind Farm, School, Firehouse, Clinic, Park, Home,  Business
-BusNVals:   .byte 0,         0,      2,         0,      0,    2,     0
-HomeNVals:  .byte 0,         2,      0,         2,      1,    0,     2
-
-; Assessed values for ADJACENT structures ($ff = -1)
-;                 Wind Farm, School, Firehouse, Clinic, Park, Home,  Business
-BusAVals:   .byte $ff,       0,      1,         0,      1,    1,     2
-HomeAVals:  .byte $ff,       1,      $ff,       $ff,    1,    $fe,   $ff
-
-; Fire Risk configuration
-; This is the annual risk of an unprotected property (Home or Business) burning
-; down. It is expressed as a carry at a specific bit value.
-FireRisk:   .byte %00001000
-
-; Earthquake configuration
-; The next Earthquake will happen QuakeFreq years from now, plus 0-7
-; years. When an Earthquake happens, this timer will be reset.
-; QuakePower determines how much damage an earthquake does
-; The default is 15 + (0-7) years, or between 15-22 years
-QuakeFreq:  .byte 15
-QuakePower: .byte 15
-
-; Tornado configuration
-; Tornadoes are checked every turn. If the pseudo-random value is 0, there will
-; be a Tornado.
-; TornPath determines the maximum path length
-; The default is a 1 in 8 chance per year, with a maximum path length of 6
-TornFreq:   .byte %00100000
-TornPath:   .byte 6
-
-; Pandemic configuration
-; The next Pandemic will happen PandFreq years from now, plus 0-8 years.
-; When a Pandemic happens, this timer will be reset.
-; The default is 25 + (0-7) years, or between 25-32 years
-PandFreq:   .byte 25
+* = $a000
+Vectors:    .word Welcome       ; Welcome Screen
+            .word Restart       ; NMI Address
+            .byte $41,$30,$c3,$c2,$cd
             
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; LABEL DEFINITIONS
@@ -93,6 +29,7 @@ PandFreq:   .byte 25
 MENU_ITEMS  = 9                 ; Number of actions in menu
 EMP_THRESH  = 7                 ; Employment threshhold
 HEIGHT      = 19                ; Maximum Y position
+DEC_PAD     = 0                 ; Left padding character (0 for no padding)
 
 ; Color Constants
 ; So I don't need to remember them anymore
@@ -156,6 +93,7 @@ WEST        = 3
 FIRE        = 4
 S_KEY       = 5                 ; "S" has been pressed (Save)
 L_KEY       = 6                 ; "L" has been pressed (Load)
+D_KEY       = 7                 ; "D" has been pressed (Disk)
 
 ; Game Memory
 UNDER       = $00               ; Character under pointer
@@ -167,6 +105,7 @@ PREV_X      = $08               ; Previous x coordinate
 PREV_Y      = $09               ; Previous y coordinate
 BUILD_IX    = $0a               ; Build index
 RNDNUM      = $0b               ; Random number tmp
+STR_PTR     = $21               ; String pointer
 BUILD_MASK  = $30               ; Build mask (for wind farms)
 ACTION_FL   = $31               ; Action flag
 NEARBY_ST   = $32               ; Nearby structures bitfield
@@ -193,6 +132,12 @@ VALUE       = $49               ; Current property value
 SMART       = $4b               ; Education (+0 - 9%)
 BUS_CAP     = $4c               ; Business Activity (2 bytes)
 ADJ_ST      = $4e               ; Adjacent structures bitfield
+DEC_OP      = $4f               ; PrintDec Operand (2 bytes)
+DEC_PAD_FL  = $51               ; Decimal padding flag
+QUOTE_FL    = $52               ; Directory quote flag
+FILE_COUNT  = $53               ; File count for disk directory
+SHOW_COUNT  = $54               ; Show count for disk directory
+DIR_IX      = $55               ; Directory index for disk directory
 COL_PTR     = $f3               ; Screen color pointer (2 bytes)
 YR_EXPEND   = $f9               ; Previous year expenditure (2 bytes)
 PTR         = $fb               ; Pointer (2 bytes)
@@ -205,6 +150,16 @@ MUSIC_FL    = $10               ; Bit 7 set if player is running
 MUSIC_TIMER = $11               ; Music timer
 MUSIC_MOVER = $12               ; Change counter
 
+; RAM storage
+MODPACK     = $100d             ; Modpack (59 bytes)
+SWAP_BOARD  = $1100             ; Swapped-out game board (512 bytes)
+DIRECTORY   = $1300             ; Disk directory, with names separated
+                                ;   by zeroes (2304 bytes)
+
+; Animated Character locations
+WindFarm    = $1d30             ; Location of Wind Farm character data
+Burning     = $1d78             ; Location of Fire character data
+
 ; Game State Memory
 ; Things that must be saved to tape
 PAND_YR     = $1ff7             ; Years until next Pandemic
@@ -214,6 +169,28 @@ YEAR        = $1ffa             ; Year (2 bytes)
 TREASURY    = $1ffc             ; Treasury (2 bytes)
 QUAKE_YR    = $1ffe             ; Years until next Earthquake
 HAPPY       = $1fff             ; Satisfaction (10% - 90%)
+
+; Ruleset
+; Loaded from cartridge to RAM during DataXfer routine
+Mode        = $100d
+Theme       = $1015
+Tempo       = $1019
+StartYear   = $101a
+StartTreas  = $101c
+LakeCount   = $101e
+NewDevCost  = $101f
+UpdateCost  = $1020
+MaintCosts  = $1021
+BusNVals    = $1026
+HomeNVals   = $102d
+BusAVals    = $1034
+HomeAVals   = $103b
+FireRisk    = $1042
+QuakeFreq   = $1043
+QuakePower  = $1044
+TornFreq    = $1045
+TornPath    = $1046
+PandFreq    = $1047
 
 ; System Resources - Memory
 CINV        = $0314             ; ISR vector
@@ -245,24 +222,26 @@ VIATIME     = $9114             ; VIA 1 Timer 1 LSB
 POWERSOF2   = $8270             ; Bit value at index (character ROM)
 KEYDOWN     = $c5               ; Key held down
 MSGFLG      = $9d               ; KERNAL message mode flag,
+IOSTATUS    = $90               ; I/O Status
 
 ; System Resources - Routines
-PRTSTR      = $cb1e             ; Print from data (Y,A)
-PRTFIX      = $ddcd             ; Decimal display routine (A,X)
 PLOT        = $fff0             ; Position cursor 
 CHROUT      = $ffd2             ; Write one character
 SETLFS      = $ffba             ; Setup logical file
 SETNAM      = $ffbd             ; Setup file name
 SAVE        = $ffd8             ; Save
 LOAD        = $ffd5             ; Load
-ISCNTC      = $ffe1             ; Check Stop key
+OPEN        = $ffc0             ; Open logical file
+CLOSE       = $ffc3             ; Close logical file
+CLALL       = $ffe7             ; Close all files
+CHKIN       = $ffc6             ; Define file as input
+CHRIN       = $ffcf             ; Get input
+CLRCHN      = $ffcc             ; Close channel
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; MAIN PROGRAM
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-Welcome:    ldx #$fb            ; Reset stack for NMI restart
-            txs                 ; ,,
-            jsr Setup           ; Set up hardware and initialize game
+Restart:    jsr Setup           ; Set up hardware and initialize game
                                 ; Unlike most of my games, there's no welcome
                                 ;   screen or "press fire to start" text. The
                                 ;   game simply starts when the program does.
@@ -278,8 +257,11 @@ ch_save:    cpx #S_KEY          ; If "S" was pressed, save the city
             bne ch_load         ; ,,
             jmp TapeSave        ; ,,
 ch_load:    cpx #L_KEY          ; If "L" was pressed, load a city
-            bne ch_action       ; ,,
+            bne ch_disk         ; ,,
             jmp TapeLoad        ; ,,
+ch_disk:    cpx #D_KEY          ; If "D" was pressed, go to Disk menu
+            bne ch_action       ; ,,
+            jmp DiskMenu        ; ,,
 ch_action:  cpx #FIRE           ; Has fire been pressed?
             beq Action          ; If so, go to Action mode
             txa                 ; Move joystick direction to A and
@@ -547,9 +529,10 @@ DrawOvervw: ldy #1              ; Plot population display
             jsr PLOT            ; ,,
             ldx POP             ; Numeric population display
             lda POP+1           ; ,,
-            jsr PRTFIX          ; ,,
-            lda #$21            ; Space for population decrease
-            jsr CHROUT          ; ,,
+            ldy #3              ; ,,
+            jsr PrintDec        ; ,,
+            lda #$21            ; Extra space for decrease
+            jsr CHROUT
             ; TREASURY
 DrawTreas:  ldy #7              ; Plot treasury display
             ldx #1              ; ,,
@@ -557,9 +540,10 @@ DrawTreas:  ldy #7              ; Plot treasury display
             jsr PLOT            ; ,,
             ldx TREASURY        ; Numeric treasury display
             lda TREASURY+1      ; ,,
-            jsr PRTFIX          ; ,,
-            lda #$21            ; Space for treasury decrease
-            jsr CHROUT          ; ,,
+            ldy #3              ; ,,
+            jsr PrintDec        ; ,,
+            lda #$21            ; Extra space for decrease
+            jsr CHROUT
             ldy TREASURY+1      ; If the Treasury has gone below 256,
             bne draw_sat        ;   add a second space as a guard against
             jsr CHROUT          ;   single-turn precipitous drop
@@ -585,22 +569,25 @@ draw_sat:   jsr GetHappy        ; Compute happiness
             jsr PLOT            ; ,,
             ldx YEAR            ; Numeric year display
             lda YEAR+1          ; ,,
-pr_year:    jmp PRTFIX          ; ,,
+            ldy #3              ; ,,
+pr_year:    jmp PrintDec        ; ,,
        
 ; Draw Budget
 ; On status line       
 DrawBudget: lda #<BudgetR       ; Show Budget Revenue Header
             ldy #>BudgetR       ; ,,
-            jsr PRTSTR          ; ,,
+            jsr PrintStr        ; ,,
             ldx YR_REVENUE      ; Show Revenue
             lda YR_REVENUE+1    ; ,,
-            jsr PRTFIX          ; ,,
+            ldy #2              ; ,,
+            jsr PrintDec        ; ,,
             lda #<BudgetE       ; Show Budget Expenditure Header
             ldy #>BudgetE       ; ,,
-            jsr PRTSTR          ; ,,
+            jsr PrintStr        ; ,,
             ldx YR_EXPEND       ; Show Expenditure
             lda YR_EXPEND+1     ; ,,
-            jmp PRTFIX          ; ,,
+            ldy #2              ; ,,
+            jmp PrintDec        ; ,,
                         
 ; Roads
 ; Add the proper roads                  
@@ -720,7 +707,7 @@ patt_done:  jsr Adjacents       ; Get buildings adjacent to the final step
             and BUILD_MASK      ; Mask allowable buildings for this pattern
             ora NEARBY_ST       ; Add this step's bitfield to cumulative byte
             sta NEARBY_ST       ; ,,
-            inc PATTERN         ; Move to the next pattern
+adv_patt:   inc PATTERN         ; Move to the next pattern
             bne next_patt       ; Until all patterns have been done
 restore_c:  ldy PREV_X          ; Restore original coordinates
             sty COOR_X          ; ,,
@@ -838,11 +825,8 @@ DrawDetail: cmp #$10            ; If the structure is a Road, do nothing
             lda MaintCosts,y    ;   structure's maintenance cost.
             pha                 ;   ,,
             ldx #2              ; Plot the cursor position
-            ldy #19             ; ,,
-            cmp #10             ;   (If the cost is more than 9, add another
-            bcc u10             ;   column to the display to make room
-            dey                 ;   ,,)
-u10:        clc                 ; ,,
+            ldy #18             ; ,,
+            clc                 ; ,,
             jsr PLOT            ; ,,
             lda #$5e            ; Minus sign
             jsr CHROUT          ; ,,
@@ -851,7 +835,8 @@ u10:        clc                 ; ,,
             pla                 ; Show the numeric maintenance cost
             tax                 ; ,,
             lda #0              ; ,,
-            jmp PRTFIX          ; ,,
+            ldy #1              ; ,,
+            jmp PrintDec        ; ,,
 struct:     lda NEARBY_ST       ; Get nearby structures stored by Trace
             sta TMP             ; Use TMP for structure list
             ldy #0              ; Y is the bit index
@@ -1366,7 +1351,9 @@ shift_rnd:  rol RNDNUM
 ; Return the direction in X
 ; 0=North, 1=East, 2=South, 3=West, 4=Fire, 5=Save, 6=Load,
 ; $ff=None (for testing BMI/BPL)
-Controls:   lda VIA1PA          ; Read VIA1 port
+Controls:   lda #$7f            ; Set DDR to read East
+            sta VIA2DD          ; ,,
+            lda VIA1PA          ; Read VIA1 port
             and #$3c            ; Keep track of bits 2,3,4,5
             sta TMP
             lda VIA2PB          ; Combine with read of bit 7
@@ -1382,13 +1369,18 @@ Controls:   lda VIA1PA          ; Read VIA1 port
             bne control_r       ; If so, set that as the joystick direction
             dex                 ; Loop back until found, or 0
             bne loop            ; ,,
+            lda #$ff            ; Set DDR back to default
+            sta VIA2DD          ; ,,
 ch_S:       lda KEYDOWN         ; Key current keypress
             cmp #41             ; "S" for Save
             bne ch_L            ; ,,
             ldx #S_KEY+1        ; ,, (will be 5 after DEX below)
 ch_L:       cmp #21             ; "L" for Load
-            bne control_r       ; ,,
+            bne ch_D            ; ,,
             ldx #L_KEY+1        ; ,, (will be 6 after DEX below)
+ch_D:       cmp #18             ; "D" for Disk
+            bne control_r       ; ,,
+            ldx #D_KEY+1        ; ,,
 control_r:  dex                 ; dex to maybe set zero flag
             rts
             
@@ -1584,7 +1576,7 @@ sub_div:    lda NUMER+1         ; If the numerator goes below 0, division is
 ; For decimal mode conversion of a hex number in Y
 ; Return the decimal number in A
 Hex2Deci:   lda #$00            ; Initialize return value
--loop:      clc                 ; Add one to A for each Y. When A hits $0a,
+-loop:      clc                 ; Add one to A for each Y. When A hits $0a
             adc #$01            ;   it'll instead increment the high nybble
             dey                 ;   as the 10s place
             bne loop            ;   ,,
@@ -1593,27 +1585,65 @@ Hex2Deci:   lda #$00            ; Initialize return value
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; SETUP ROUTINES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; Set up hardware
-Setup:      lda #44             ; Set 22-character screen height
-            sta VICCR3          ;
-            lsr ACTION_FL       ; Clear Action flag (before ISR starts)
-            lda #$ff            ; Set custom character location
-            sta VICCR5          ; ,,
-            lda #$7f            ; Set DDR to read East
-            sta VIA2DD          ; ,,
+; Welcome Screen
+; This is the starting point of the cartridge auto start
+Welcome:    jsr $fd8d           ; Test RAM, initialize VIC chip
+            jsr $fd52           ; Restore default I/O vectors
+            jsr $fdf9           ; Initialize I/O registers
+            jsr $e518           ; Initialize hardware
+            cli                 ; Clear interrupt flag from ROM jump
+            lda #<Restart       ; Install the custom NMI (restart)
+            sta NMINV           ; ,, 
+            lda #>Restart       ; ,,
+            sta NMINV+1         ; ,,
             lda #$80            ; Disable Commodore-Shift
             sta CASECT          ; ,,
-            lda TIME            ; Seed random number generator
+            lda #44             ; Set 22-character screen height
+            sta VICCR3          ;
+            lda #254            ; Set initial screen color
+            sta SCRCOL          ; ,,
+            ldx #0
+-loop:      lda Skyline,x
+            sta SCREEN+234,x
+            lda #6
+            sta COLOR+234,x
+            inx
+            bne loop
+            lda #240            ; Restore character set
+            sta VICCR5          ; ,,
+            lda #<Intro         ; Show Splash Screen
+            ldy #>Intro         ; ,,
+            jsr PrintStr        ; ,,
+            ldx #RulesetEnd-Ruleset
+-loop:      lda Ruleset,x
+            sta MODPACK,x
+            dex
+            bpl loop
+-wait:      jsr Controls
+            cpx #FIRE
+            bne wait
+-debounce:  jsr Controls
+            bpl debounce
+            jmp Restart
+            
+; Set up hardware
+Setup:      lda VIATIME+1       ; Seed random number generator.
             ora #$01            ; ,,
             sta P_RAND          ; ,,
             lda VIATIME         ; ,,
             ora #$80            ; ,,
             sta P_RAND+1        ; ,,
-            lda #<Welcome       ; Install the custom NMI (restart)
-            sta NMINV           ; ,, 
-            lda #>Welcome       ; ,,
-            sta NMINV+1         ; ,,
-            jsr MusicStop       ; Zero out sound registers
+            lsr ACTION_FL       ; Clear Action flag (before ISR starts)
+            jsr MusicStop       ; Clear sound registers
+            lda #$ff            ; Set custom character set
+            sta VICCR5          ; ,,
+            ldx #0
+-loop:      lda CharSet,x       ; Move character set data
+            sta $1c00,x         ; ,,
+            lda CharSet+256,x   ; ,,
+            sta $1d00,x         ; ,,
+            dex                 ; ,,
+            bne loop            ; ,,
 InstallISR: sei                 ; Install the custom ISR
             lda #<ISR           ; ,,
             sta CINV            ; ,,
@@ -1627,7 +1657,7 @@ InitGame:   lda #254            ; Set initial screen color
             sta SCRCOL          ; ,,
             lda #<Header        ; Show Board Header
             ldy #>Header        ; ,,
-            jsr PRTSTR          ; ,,
+            jsr PrintStr        ; ,,
             lda #0              ; Reset build index to Cancel
             sta BUILD_IX        ; ,,
             sta POP             ; Initialize population
@@ -1657,7 +1687,7 @@ InitGame:   lda #254            ; Set initial screen color
             sta COOR_X          ; ,,
             sta COOR_Y          ; ,,
             jsr DrawOvervw      ; Show Overview Bar contents
-            lda #BLUE           ; Set Info Bar color to blue
+            lda #6              ; Set Info Bar color to blue
             ldy #21             ; ,,
 -loop:      sta COLOR+44,y      ; ,,
             dey                 ; ,,
@@ -1841,11 +1871,453 @@ ClrPrompt:  lda #$20            ; Clear the tape prompt icons
             rts                 ; Return from caller with Z=0
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; DISK SAVE/LOAD
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Swap Out
+; For start of Save screen
+SwapOut:    lda UNDER           ; Clear the Cursor out of the way
+            jsr Place           ; ,,
+            ldy #0
+-loop:      lda SCREEN,y
+            sta SWAP_BOARD,y
+            lda SCREEN+$0100,y
+            sta SWAP_BOARD+$0100,y
+            dey
+            bne loop
+            rts
+            
+; Swap In
+; For return to game
+SwapIn:     ldy #0
+-loop:      lda SWAP_BOARD,y
+            sta SCREEN,y
+            lda SWAP_BOARD+$0100,y
+            sta SCREEN+$0100,y
+            dey
+            bne loop
+            rts
+
+; Diskette Menu                        
+DiskMenu:   jsr CLALL
+            sec                 ; Activate minimal ISR for disk menu
+            ror MISR_FL         ; ,,
+            ldx #0
+            lda #$f0            ; Set default character set
+            sta VICCR5          ; ,,
+            jsr MusicStop          
+            jsr SwapOut         ; Swap out the existing city screen
+            lda #<Disk1         ; Show Disk Menu
+            ldy #>Disk1         ; ,,
+            jsr PrintStr        ; ,,
+MenuInput:  ldy #3              ; Put the year after the word Save
+-loop:      lda SWAP_BOARD+40,y ; ,,
+            sta SCREEN+101,y    ; ,,
+            lda #BLACK          ; ,, (Color the filename)
+            sta COLOR+101,y     ; ,,
+            dey                 ; ,,
+            bpl loop            ; ,,
+-debounce:  lda KEYDOWN         ; Debounce key
+            cmp #$40            ; ,,
+            bne debounce        ; ,,
+-wait:      lda KEYDOWN         ; Wait for key
+            cmp #$40            ; ,,
+            beq wait            ; ,,
+            cmp #$18            ; STOP pressed, return to Main
+            bne ch_disk_l       ; ,,
+ExitDisk:   jsr SwapIn          ; Swap city data back to screen
+LoadDone:   lda #$ff            ; Set character set back to city
+            sta VICCR5          ; ,,
+            ldy #66             ; Set the header color back
+            lda #BLUE           ;   to blue
+-loop:      sta COLOR,y         ;    ,,
+            dey                 ;    ,,
+            bpl loop            ;    ,,
+            jsr SetScrCol       ; Put screen color back to game state            
+            jsr MusicPlay       ; Start music
+            jsr Roads           ; Fix colors
+            jsr DrawCursor      ; Unhide the cursor
+            lsr MISR_FL         ; Clear minimal ISR flag
+            jmp Main            ; Back to Main
+ch_disk_l:  cmp #21             ; "L" for disk load
+            bne ch_disk_s       ; ,,
+            jmp LoadMenu        ; ,,
+ch_disk_s:  cmp #41             ; "S" for disk save
+            bne wait            ; ,,
+            ; Fall through to Save
+            
+; Save Current City
+DiskSave:   lda #250            ; Screen/Border color (red border)
+            sta SCRCOL          ; ,,
+            ldy #66             ; Set the header color back
+            lda #BLUE           ;   to blue
+-loop:      sta COLOR,y         ;    ,,
+            dey                 ;    ,,
+            bpl loop            ;    ,,
+            lda #$ff            ; Display city character set during save
+            sta VICCR5          ; ,,
+            jsr SwapIn          ; ,,
+            jsr Roads           ; Show in the correct colors
+            ldx #8              ; Device number
+            ldy #0              ; Command (none)
+            jsr SETLFS          ; ,,            
+            lda #4              ; Filename is the current four-digit year,
+            ldx #<SCREEN+40     ;   which can be scraped from the screen
+            ldy #>SCREEN+40     ;   ,,
+            jsr SETNAM          ;   ,,
+            ldx #<SCREEN        ; Low byte start
+            stx $c1             ; ,,
+            ldy #>SCREEN        ; High byte start
+            sty $c2             ; ,,
+            lda #$c1            ; Set tab
+            iny                 ; 512 bytes
+            iny                 ; ,,
+            jsr SAVE            ; SAVE
+            bcc ExitDisk        ; Exit Disk Menu if save OK
+            ; Fall through to error recovery
+
+; Recover from Disk Error
+; By restoring the disk menu screen           
+ErrRecover: lda #$f0            ; Back to default character set
+            sta VICCR5          ; ,,
+            jsr SwapOut         ; Swap out the existing city screen
+            ; Fall through to DiskError
+            
+; Display Disk Error
+; And return to Diskette Menu             
+DiskError:  jsr CLALL           ; Close all files
+            lda #<Disk1         ; Show Disk Menu
+            ldy #>Disk1         ; ,,
+            jsr PrintStr        ; ,,
+            lda #<Disk2         ; Show Disk Error
+            ldy #>Disk2         ; ,,
+            jsr PrintStr        ; ,,
+            jmp MenuInput       ; Back to Menu
+              
+; Generate Directory     
+LoadMenu:   jsr CLALL
+            lda #<DIRECTORY     ; Initialize directory storage
+            sta TMP_PTR         ; ,,
+            lda #>DIRECTORY     ; ,,
+            sta TMP_PTR+1       ; ,,
+            lda #0              ; Initialize file count
+            sta FILE_COUNT      ; ,,
+            lda #<Disk3         ; Show "getting directory"
+            ldy #>Disk3         ; ,,
+            jsr PrintStr        ; ,,
+            lda #1              ; SETNAM - (1) Set name length
+            ldx #<lfs+1         ; - Set name as the $ used below
+            ldy #>lfs+1         ; ,,
+            jsr SETNAM          ; ,,
+lfs:        lda #"$"            ; SETLFS - Set file number as $
+            ldx #8              ; - Device number
+            ldy #0              ; - Command
+            jsr SETLFS          ; ,,
+            jsr OPEN
+            bcs DiskError
+            ldx #"$"
+            jsr CHKIN
+            jsr CharIn          ; Dispose of PRG header
+            jsr CharIn          ; ,,
+            bcs DiskError       ; ,,
+newline:    lda #0              ; Set quote flag to 0. Needs to be 0 because
+            sta QUOTE_FL        ;   this flag has three possible states
+            ldx #4              ; Dispose of next line pointer and
+-loop:      jsr CharIn          ;   line number
+            bcs DiskError       ;   ,,
+            dex                 ;   ,,
+            bne loop            ;   ,,
+-loop:      jsr CharIn          ; Get next character from line
+            bcs DiskError       ; ,,
+            beq EOL             ; 0 indicates end-of-line
+            cmp #$22            ; Is character a quotation mark?
+            bne proc_name       ; If not, go process the name
+            sec                 ; Set the quote flag to either %10000000 or
+            ror QUOTE_FL        ;   %11000000
+            bcc loop            ; Go back for next character
+proc_name:  bit QUOTE_FL        ; Check the quote state
+            bvs loop            ; If bit 6 is set, the quote is finished
+            bpl loop            ; If bit 7 is clear, the quote hasn't started
+            jsr DirAdd          ; Add character to directory
+            jmp loop
+EOL:        bit QUOTE_FL        ; If the line ends without a filename in quotes
+            bvc EOF             ;   go to end of file. Else go back for more.
+            lda FILE_COUNT      ; If there are already 255 files, no more
+            cmp #$ff            ;   can be displayed, so end file
+            beq EOF             ;   ,,
+            lda #0              ; Add delimiter to directory
+            jsr DirAdd          ; ,,
+            beq EOF             ; Out of memory, so end directory capture
+            inc FILE_COUNT      ; Increment file count
+            jmp newline
+EOF:        jsr CLRCHN          ; Clear input channel and close file when
+            lda #"$"            ;   a quote pair isn't found
+            jsr CLOSE           ;   ,,
+            lda #0              ; Add a final zero, for last file
+            jsr DirAdd          ; ,,
+            lda #<Disk4         ; Show Load Menu
+            ldy #>Disk4         ; ,,
+            jsr PrintStr        ; ,,
+            lda FILE_COUNT
+            cmp #1
+            bne init_dir
+            lda #<Disk5         ; No files on disk
+            ldy #>Disk5         ; ,,
+            jsr PrintStr        ; ,,
+init_dir:   lda #1              ; Initialize directory display at top (skipping the
+            sta DIR_IX          ;   disk name)
+ShowDir:    jsr ShowFiles       ; Show filenames from directory index
+-wait:      lda KEYDOWN         ; Wait for control. Is STOP pressed?
+            cmp #$18            ; ,,
+            bne ch_load_f       ; ,,
+            jmp ExitDisk        ; If so, exit disk menu
+ch_load_f:  cmp #$0f            ; Is RETURN pressed?
+            bne ch_sel          ; ,,
+            jmp DiskLoad        ; If so, load file
+ch_sel:     jsr Controls        ; Is the joystick pointing somewhere?
+            bmi wait            ; If not, go back for more
+            cpx #NORTH          ; North decreases the file index
+            bne ch_nx_file      ; ,,
+            dec DIR_IX          ; ,,
+            bne ShowDir         ; ,, If it's 0, bring back to 1 because
+            inc DIR_IX          ; ,, 0 is the disk name
+            bne ShowDir         ; Redraw directory and continue
+ch_nx_file: cpx #SOUTH          ; South increases the file index
+            bne ShowDir         ; ,,
+            inc DIR_IX          ; ,,
+            lda DIR_IX          ; ,, If it's reached the file count, go
+            cmp FILE_COUNT      ; ,, back
+            bne ShowDir         ;    ,,
+            dec DIR_IX          ;    ,,
+            bne ShowDir         ;    ,,
+
+; Load Selected File            
+DiskLoad:   lda #253            ; Screen/Border color (green border)
+            sta SCRCOL          ; ,,
+            lda #<Disk6         ; Loading message
+            ldy #>Disk6         ; ,,
+            jsr PrintStr        ; ,,
+            jsr AdvFile         ; Get pointer to name
+            ldy #0              ; Get name length
+-loop:      lda (TMP_PTR),y     ; Get next character
+            iny                 ; Count name length
+            cmp #0              ; Have we reached the end of the name?
+            bne loop            ; ,,
+            dey                 ; Went one too far, so back off
+            tya                 ; A is the filename
+            ldx TMP_PTR         ; X is low byte of name pointer
+            ldy TMP_PTR+1       ; Y is high byte of name pointer
+            jsr SETNAM          ;   ,,
+            ldx #8              ; Tape device number
+            ldy #1              ; Load to header location
+            jsr SETLFS          ; ,,
+            lda #$00            ; Perform load
+            jsr LOAD            ; ,,
+            bcs load_err        ; Display error if carry set
+            lda $af             ; Is this a city (ending at $2000)?
+            cmp #$20            ; ,,
+            beq city            ; If not, exit by swapping city back in
+            jmp ExitDisk        ;   ,,
+city:       ldx #0              ; Preserve whatever came from the load
+            lda (PTR,x)         ;   under the Cursor
+            sta UNDER           ;   ,,
+            jmp LoadDone
+load_err:   jmp DiskError       ; Because it's out of relative branch range            
+                        
+; Character Input
+; C=1 if failure          
+CharIn:     jsr CHRIN           ; Call KERNAL input
+            pha                 ; Save character on stack
+            lda IOSTATUS        ; Is the read status okay?
+            cmp #$01            ; ,,
+            pla                 ; Bring back read byte
+            rts
+            
+; Add to Directory   
+; Sets Z if out of memory                 
+DirAdd:     ldx TMP_PTR+1       ; Out of directory space?
+            cpx #$1c            ; ,,
+            beq diradd_r        ; Then no more entries
+            ldx #0              ; Store name character
+            sta (TMP_PTR,x)     ; ,,
+            jsr IncFnPtr        ; Increment pointer
+diradd_r:   rts                              
+
+; Show Filenames
+; From DIR_IX   
+ShowFiles:  lda FILE_COUNT      ; Show nothing if no files on disk
+            cmp #1              ; ,,
+            beq showf_r         ; ,,
+            ldx #10             ; Plot start of file display
+            ldy #0              ; ,,
+            clc                 ; ,,
+            jsr PLOT            ; ,,
+            jsr AdvFile         ; Advance file pointer to file index
+            ldy #10             ; Show up to ten files
+file_line:  lda #$20            ; Space before filename
+            jsr CHROUT          ; ,,
+            lda #221            ; Left-hand border
+            jsr CHROUT          ; ,,
+            cpy #10
+            bne no_rvs
+            lda #18             ; Reverse on for first file
+            jsr CHROUT          ; ,,
+no_rvs:     lda #18             ; Set name length
+            sta TMP             ; ,,
+-loop:      ldx #0              ; Get next character
+            lda (TMP_PTR,x)     ; ,,
+            beq next_file       ; ,,
+            jsr CHROUT          ; Show the character
+            dec TMP             ; Decrement name length
+            jsr IncFnPtr
+            bne loop
+next_file:  lda #$20            ; Clear the rest of the line
+-loop:      jsr CHROUT          ; ,,
+            dec TMP             ; ,,
+            bne loop            ; ,,
+            lda #146            ; Unreverse
+            jsr CHROUT          ; ,,
+            lda #221            ; Right-hand border
+            jsr CHROUT          ; ,,
+            lda #$0d            ; Drop to next line
+            jsr CHROUT          ; ,,
+            jsr IncFnPtr        ; Advance pointer off the 0
+            lda SHOW_COUNT      ; Was the last file displayed?
+            cmp FILE_COUNT      ; ,,
+            beq show_bott        ; If so, file list is done
+            inc SHOW_COUNT      ; Increment show count
+            dey                 ; Decrement maximum file display
+            bne file_line       ; Go get next file
+show_bott:  lda #<DirBottom     ; Directory bottom
+            ldy #>DirBottom     ; ,,
+            jsr PrintStr        ; ,,
+            ldy #21
+-loop:      lda #$20
+            jsr CHROUT
+            dey
+            bne loop
+showf_r:    rts
+
+; Advance File
+; Put pointer at DIR_IX
+AdvFile:    lda #0              ; Set show count to 0. This will be
+            sta SHOW_COUNT      ;   incremented until we hit DIR_IX
+            ldy DIR_IX          ; Y = directory index
+            lda #<DIRECTORY     ; Initialize directory storage
+            sta TMP_PTR         ; ,,
+            lda #>DIRECTORY     ; ,,
+            sta TMP_PTR+1       ; ,,
+adv_more:   jsr IncFnPtr
+            ldx #0
+            lda (TMP_PTR,x)
+            bne adv_more
+            inc SHOW_COUNT
+            lda SHOW_COUNT
+            cmp DIR_IX
+            bne adv_more
+            ; Fall through to pointer increment for start of next filename
+
+; Increment filename pointer
+IncFnPtr:   inc TMP_PTR
+            bne incfn_r
+            inc TMP_PTR+1
+incfn_r:    rts
+                                                                                
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; OUTPUT ROUTINES
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Print Decimal Number
+; Left-padded by spaces
+; X = Low Byte
+; A = High Byte
+; Y = Number of Decimal Places Minus 1 (0-4)
+;     Place overflow is not handled, so if you're wrong, you'll leave
+;     base 10 for something undefined. Overflow can be handled by watching X
+;     at print_pl, if you need to do that.
+PrintDec:   lsr DEC_PAD_FL      ; Clear padding flag
+            stx DEC_OP          ; Store operand
+            sta DEC_OP+1        ; ,,
+-next:      ldx #0              ; X is the number of subtractions per place
+-loop:      lda DEC_OP          ; Is there enough of a remainder in the
+            cmp PlaceLow,y      ;   operand to perform the division?
+            lda DEC_OP+1        ;   ,,
+            sbc PlaceHigh,y     ;   ,,
+            bcc print_pl        ; If not, use 0 for this place
+            inx                 ; Perform 16-bit substractions from the
+            lda DEC_OP          ;   operand, counting the number of times
+            sec                 ;   the place value was subtracted in X.
+            sbc PlaceLow,y      ;   This will be the place digit.
+            sta DEC_OP          ;   ,,
+            lda DEC_OP+1        ;   ,,
+            sbc PlaceHigh,y     ;   ,,
+            sta DEC_OP+1        ;   ,,
+            bcs loop            ; 
+print_pl:   txa                 ; 
+            bne in_number       ; If the number is nonzero, just print it
+            bit DEC_PAD_FL      ; Has there been a nonzero value in this number?
+            bmi in_number       ;   If so, print this as a zero
+            cpy #0              ; Is this the ones place?
+            beq in_number       ;   If so, print the final zero
+            lda #DEC_PAD        ; Print this one as padding
+            jmp dec_out         ; If DEC_PAD=0, number will be flush left
+in_number:  sec                 ; When the first nonzero number is printed,
+            ror DEC_PAD_FL      ;   set the padding flag to stop padding
+            ora #"0"            ; Add "0" to the calculated place digit, print
+dec_out:    jsr CHROUT          ;   ,, (X and Y are both safe from this)
+            dey                 ; Decrement place counter and continue
+            bpl next            ; ,,
+            rts
+
+; Print String
+; Like BASIC's $cb1e, but not destructive to BASIC memory when coming from
+; the BASIC input buffer (see $d4bb)         
+PrintStr:   sta STR_PTR
+            sty STR_PTR+1
+            ldy #$00
+-loop:      lda (STR_PTR),y
+            beq print_r
+            jsr CHROUT
+            lda #$00            ; Turn off quote mode for each character
+            sta $d4             ; ,,
+            iny
+            bne loop
+print_r:    rts   
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; DATA TABLES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Splash Screen text
+Intro:      .asc $13,$0d,$0d,$1f,"      ZEPTOPOLIS",
+            .asc $0d,$0d,$0d,$0d,"  2O21 JASON JUSTIAN",
+            .asc $0d,$0d," BEIGEMAZE.COM/VICLAB",0
+
 ; Game Board Header
 Header:     .asc $93,$1f,"PQRSTU!!!!!!!!VWXYZ[",$5c,"]"
-            .asc ":!!!!!;!!!!!<!!>!=!!!!",$00
+            .asc ":!!!!!;!!!!!<!!>!=!!!!",0
+
+; Disk Utility Text
+; Menu
+Disk1:      .asc $93,$0d,$1f," DISKETTE MENU",$0d,$0d,$0d,
+            .asc " ",$12,"S",$92,"   : SAVE ",$22,"    ",$22,$0d,$0d,
+            .asc " ",$12,"L",$92,"   : LOAD",$0d,$0d,
+            .asc " ",$12,"STOP",$92,": CANCEL",0
+; Error
+Disk2:      .asc $13,$0d,$1c,"  *** DISK ERROR *** ",$1f,$0d,$0d,$0d,$0d,$0d,
+            .asc $0d,$0d,00
+; Getting Directory
+Disk3:      .asc $0d,$0d,$0d," GETTING DIRECTORY...",0
+; Load Screen
+Disk4:      .asc $93,$0d,$1f," LOAD CITY OR MODPACK",$0d,$0d,$0d,
+            .asc " JOYSTICK: SELECT",$0d,$0d,
+            .asc " ",$12,"RETURN",$92,"  : LOAD",$0d,$0d,
+            .asc " ",$12,"STOP",$92,"    : CANCEL",$0d,
+            .asc $20,176,192,192,192,192,192,192,192,192,192,192,192,192,192
+            .asc 192,192,192,192,192,174,0
+DirBottom:  .asc $20,173,192,192,192,192,192,192,192,192,192,192,192,192,192
+            .asc 192,192,192,192,192,189,$0d,0
+; No Files
+Disk5:      .asc $13,$0d,$1c,"   *** NO FILES *** ",$1f,0
+; Loading...
+Disk6:      .asc $13,$0d,$1e,"  *** LOADING... *** ",$1f,0
 
 ; Budget Header
 BudgetR     .asc $13,$11,$11,$5f,";",$00
@@ -1889,24 +2361,84 @@ BitChr:     .byte CHR_WIND,CHR_SCHOOL,CHR_FIRE,CHR_CLINIC,CHR_PARK
 ; Search pattern for adjacent search, starting from index 3 (PTR minus 22)
 CarPatt:    .byte 21,2,21,0
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; CUSTOM CHARACTER SET
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; The character set must start at $1C00. If you change anything
-; anywhere, you must account for this. The easiest way is to use
-; padding bytes immediately before this character data.
-;
-; The easiest way to tell if you've done this right is to
-; make sure that the object code is exactly 3583 bytes. This is
-; a reliable method as long as you don't add anything AFTER this
-; character data.
-;
-; (The following lines generate padding for XA)
-pre_charset:
-* = $1c00
-.dsb (*-pre_charset)
-* = $1c00
+; Decimal system place values for 16-bit numbers, from low to high
+; 1, 10, 100, 1000, 10000            
+PlaceLow:   .byte $01,$0a,$64,$e8,$10
+PlaceHigh:  .byte $00,$00,$00,$03,$27
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; RULESET
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; See modpack-boilerplate.asm for more information.
+; This data is loaded by the Welcome subroutine to $100d so that it can be
+; overwritten by a Modpack load
+Ruleset
+
+; Musical Mode
+; Dorian         
+_Mode:      .byte 147,159,163,175,183,191,195,201         
+
+; Musical Theme
+_Theme:     .byte $33,$44,$55,$66
+_Tempo:     .byte 10
+
+; Starting conditions
+_StartYear: .word 2021
+_StartTreas:.word 500
+_LakeCount: .byte 6
+
+; Build costs
+_NewDevCost:.byte 5
+_UpdateCost:.byte 10
+
+; Yearly maintenance costs of maintainable structures
+;                 Wind Farm,School, Firehouse, Clinic, Park
+_MaintCosts:.byte 5,        15,     10,        10,     1
+
+; Assessed values for NEARBY structures ($ff = -1)
+;                 Wind Farm, School, Firehouse, Clinic, Park, Home,  Business
+_BusNVals:  .byte 0,         0,      2,         0,      0,    2,     0
+_HomeNVals: .byte 0,         2,      0,         2,      1,    0,     2
+
+; Assessed values for ADJACENT structures ($ff = -1)
+;                 Wind Farm, School, Firehouse, Clinic, Park, Home,  Business
+_BusAVals:  .byte $ff,       0,      1,         0,      1,    1,     2
+_HomeAVals: .byte $ff,       1,      $ff,       $ff,    1,    $fe,   $ff
+
+; Fire Risk configuration
+; This is the annual risk of an unprotected property (Home or Business) burning
+; down. It is expressed as a carry at a specific bit value.
+_FireRisk:  .byte %00001000
+
+; Earthquake configuration
+; The next Earthquake will happen QuakeFreq years from now, plus 0-7
+; years. When an Earthquake happens, this timer will be reset.
+; QuakePower determines how much damage an earthquake does
+; The default is 15 + (0-7) years, or between 15-22 years
+_QuakeFreq: .byte 15
+_QuakePower:.byte 15
+
+; Tornado configuration
+; Tornadoes are checked every turn. If the pseudo-random value is 0, there will
+; be a Tornado.
+; TornPath determines the maximum path length
+; The default is a 1 in 8 chance per year, with a maximum path length of 6
+_TornFreq:  .byte %00100000
+_TornPath:  .byte 6
+
+; Pandemic configuration
+; The next Pandemic will happen PandFreq years from now, plus 0-8 years.
+; When a Pandemic happens, this timer will be reset.
+; The default is 25 + (0-7) years, or between 25-32 years
+_PandFreq:  .byte 25
+
+RulesetEnd
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; CITY CHARACTER SET
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; This will be copied from CharSet to $1c00, the location of the custom
+; character set.
 ; Roads $00 - $0f
 CharSet:    .byte $00,$aa,$aa,$aa,$00,$aa,$aa,$aa  ; 0000 Parking Lot 
             .byte $54,$54,$44,$54,$54,$44,$7c,$00  ; 0001 N			  
@@ -1950,7 +2482,7 @@ CharSet:    .byte $00,$aa,$aa,$aa,$00,$aa,$aa,$aa  ; 0000 Parking Lot
             .byte $44,$54,$54,$44,$44,$54,$54,$44  ; $23 Road Placeholder       
             .byte $00,$10,$38,$6c,$c6,$44,$44,$7c  ; $24 Unocc. Home
             .byte $00,$00,$60,$fe,$82,$aa,$82,$fe  ; $25 Unocc. Business
-WindFarm:   .byte $00,$10,$10,$38,$44,$10,$10,$10  ; $26 Wind Farm
+            .byte $00,$10,$10,$38,$44,$10,$10,$10  ; $26 Wind Farm
             .byte $00,$18,$10,$7c,$ee,$fe,$aa,$aa  ; $27 School
             .byte $00,$0e,$0a,$fe,$fe,$8a,$ae,$ae  ; $28 Firehouse
             .byte $00,$18,$92,$fe,$ee,$c6,$ee,$fe  ; $29 Clinic
@@ -1959,7 +2491,7 @@ WindFarm:   .byte $00,$10,$10,$38,$44,$10,$10,$10  ; $26 Wind Farm
             .byte $00,$10,$38,$6c,$fe,$5c,$74,$74  ; $2c Home
             .byte $00,$00,$60,$fe,$aa,$fe,$aa,$fa  ; $2d Business
             .byte $00,$38,$6c,$d6,$fe,$dc,$ac,$78  ; $2e Lake
-Burning:    .byte $00,$10,$18,$3c,$6e,$ee,$cc,$78  ; $2f Burned Down
+            .byte $00,$10,$18,$3c,$6e,$ee,$cc,$78  ; $2f Burned Down
                         
 ; Numerals $30 - $39
             .byte $ff,$ff,$83,$bb,$bb,$bb,$83,$ff  ; 0
@@ -1980,3 +2512,44 @@ Burning:    .byte $00,$10,$18,$3c,$6e,$ee,$cc,$78  ; $2f Burned Down
             .byte $83,$ff,$ab,$ff,$ab,$ff,$ab,$ff  ; $3d Calendar
             .byte $ff,$ff,$bb,$f7,$ef,$df,$bb,$ff  ; $3e Percent Sign
             .byte $00,$60,$78,$7e,$7e,$78,$60,$00  ; $3f Play Icon
+ 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; DETROIT SKYLINE FOR SPLASH PAGE
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+Skyline:    .byte $20,$6c,$79,$20,$20,$20,$20,$20
+            .byte $20,$20,$20,$20,$20,$20,$20,$20
+            .byte $20,$20,$20,$20,$20,$20,$20,$e1
+            .byte $e7,$20,$20,$20,$20,$20,$20,$20
+            .byte $20,$20,$20,$20,$20,$20,$20,$20
+            .byte $20,$20,$20,$20,$20,$e1,$e7,$2e
+            .byte $20,$20,$20,$20,$20,$20,$20,$20
+            .byte $20,$20,$20,$20,$20,$20,$20,$68
+            .byte $79,$7b,$20,$e5,$a0,$bc,$79,$79
+            .byte $d0,$20,$20,$20,$20,$20,$20,$20
+            .byte $20,$20,$20,$20,$20,$a3,$a0,$61
+            .byte $ca,$ad,$a0,$ae,$a0,$a0,$e7,$20
+            .byte $20,$20,$20,$20,$20,$20,$20,$20
+            .byte $20,$20,$20,$da,$a0,$c8,$a7,$ba
+            .byte $a0,$ae,$a0,$a0,$e7,$20,$20,$20
+            .byte $20,$20,$2c,$20,$20,$20,$20,$20
+            .byte $20,$e5,$a0,$a7,$ca,$ad,$a0,$a9
+            .byte $a0,$a0,$e7,$20,$20,$20,$20,$68
+            .byte $a3,$7b,$20,$20,$20,$20,$20,$a0
+            .byte $a0,$a0,$e7,$a0,$a0,$bd,$a0,$a0
+            .byte $e7,$20,$ae,$a0,$65,$cb,$fd,$61
+            .byte $00,$f8,$76,$75,$20,$a0,$a0,$a0
+            .byte $a7,$a0,$a0,$a0,$a0,$a0,$e7,$20
+            .byte $a7,$a0,$80,$ba,$ba,$ca,$62,$bd
+            .byte $fe,$a2,$62,$a0,$a0,$a0,$a0,$a0
+            .byte $a0,$a0,$a0,$a0,$e7,$64,$a0,$a0
+            .byte $a0,$a0,$a0,$a0,$a0,$a7,$ba,$a0
+            .byte $a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0
+            .byte $a0,$a0,$a0,$a0,$66,$f9,$e8,$f0
+            .byte $e8,$bd,$bd,$c0,$c0,$ae,$ba,$a0
+            .byte $a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0
+            .byte $a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0
+            .byte $a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0
+            .byte $a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0
+            .byte $a0,$a0,$a0,$a0,$a0,$a0
+            
+CodeEnd
