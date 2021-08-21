@@ -93,7 +93,7 @@ WEST        = 3
 FIRE        = 4
 S_KEY       = 5                 ; "S" has been pressed (Save)
 L_KEY       = 6                 ; "L" has been pressed (Load)
-D_KEY       = 7                 ; "D" has been pressed (Disk)
+F1_KEY      = 7                 ; "F1" has been pressed (Disk)
 
 ; Game Memory
 UNDER       = $00               ; Character under pointer
@@ -138,6 +138,7 @@ QUOTE_FL    = $52               ; Directory quote flag
 FILE_COUNT  = $53               ; File count for disk directory
 SHOW_COUNT  = $54               ; Show count for disk directory
 DIR_IX      = $55               ; Directory index for disk directory
+SAVE_EXT    = $56               ; Saved city extension
 COL_PTR     = $f3               ; Screen color pointer (2 bytes)
 YR_EXPEND   = $f9               ; Previous year expenditure (2 bytes)
 PTR         = $fb               ; Pointer (2 bytes)
@@ -152,6 +153,7 @@ MUSIC_MOVER = $12               ; Change counter
 
 ; RAM storage
 MODPACK     = $100d             ; Modpack (59 bytes)
+SAVE_NAME   = $1080             ; Disk save name for SETNAM (6 bytes)
 SWAP_BOARD  = $1100             ; Swapped-out game board (512 bytes)
 DIRECTORY   = $1300             ; Disk directory, with names separated
                                 ;   by zeroes (2304 bytes)
@@ -259,7 +261,7 @@ ch_save:    cpx #S_KEY          ; If "S" was pressed, save the city
 ch_load:    cpx #L_KEY          ; If "L" was pressed, load a city
             bne ch_disk         ; ,,
             jmp TapeLoad        ; ,,
-ch_disk:    cpx #D_KEY          ; If "D" was pressed, go to Disk menu
+ch_disk:    cpx #F1_KEY         ; If "F1" was pressed, go to Disk menu
             bne ch_action       ; ,,
             jmp DiskMenu        ; ,,
 ch_action:  cpx #FIRE           ; Has fire been pressed?
@@ -1376,11 +1378,11 @@ ch_S:       lda KEYDOWN         ; Key current keypress
             bne ch_L            ; ,,
             ldx #S_KEY+1        ; ,, (will be 5 after DEX below)
 ch_L:       cmp #21             ; "L" for Load
-            bne ch_D            ; ,,
+            bne ch_F1           ; ,,
             ldx #L_KEY+1        ; ,, (will be 6 after DEX below)
-ch_D:       cmp #18             ; "D" for Disk
+ch_F1:      cmp #39             ; "F1" for Disk
             bne control_r       ; ,,
-            ldx #D_KEY+1        ; ,,
+            ldx #F1_KEY+1       ; ,,
 control_r:  dex                 ; dex to maybe set zero flag
             rts
             
@@ -1677,6 +1679,8 @@ InitGame:   lda #254            ; Set initial screen color
             sta YEAR+1          ; ,,
             lda #$ff            ; Reset Pandemic Counter
             sta PAND_COUNT      ; ,,
+            lda #"1"            ; Default Save extension
+            sta SAVE_EXT        ; ,,
             ldy LakeCount       ; Add a number of Lakes to the board
 -loop:      jsr RandCoor        ; ,,
             lda #CHR_LAKE       ; ,,
@@ -1911,11 +1915,11 @@ DiskMenu:   jsr CLALL
             jsr PrintStr        ; ,,
 MenuInput:  ldy #3              ; Put the year after the word Save
 -loop:      lda SWAP_BOARD+40,y ; ,,
-            sta SCREEN+101,y    ; ,,
-            lda #BLACK          ; ,, (Color the filename)
-            sta COLOR+101,y     ; ,,
+            sta SCREEN+145,y    ; ,,
             dey                 ; ,,
             bpl loop            ; ,,
+            lda SAVE_EXT        ; Put the save extension after the year
+            sta SCREEN+150      ; ,,
 -debounce:  lda KEYDOWN         ; Debounce key
             cmp #$40            ; ,,
             bne debounce        ; ,,
@@ -1942,12 +1946,25 @@ ch_disk_l:  cmp #21             ; "L" for disk load
             bne ch_disk_s       ; ,,
             jmp LoadMenu        ; ,,
 ch_disk_s:  cmp #41             ; "S" for disk save
-            bne wait            ; ,,
-            ; Fall through to Save
+            beq DiskSave        ; ,,
+ch_filen:   jsr $ffe4           ; Change filename
+            beq wait            ; If no keypress, go back to wait
+            cmp #"0"            ; Make sure the key is between 0 and 9
+            bcc wait            ; ,,
+            cmp #"9"+1          ; ,,
+            bcs wait            ; ,,
+            sta SCREEN+150      ; Set it in the filename location
+            sta SAVE_EXT        ; Set it in the extension storage
+            jmp wait
             
 ; Save Current City
 DiskSave:   lda #250            ; Screen/Border color (red border)
             sta SCRCOL          ; ,,
+            ldy #6              ; Transfer name from screen into a
+-loop:      lda SCREEN+145,y    ;   save name buffer for use by
+            sta SAVE_NAME,y     ;   SETNAM
+            dey                 ;   ,,
+            bpl loop            ;   ,,
             ldy #66             ; Set the header color back
             lda #BLUE           ;   to blue
 -loop:      sta COLOR,y         ;    ,,
@@ -1960,9 +1977,9 @@ DiskSave:   lda #250            ; Screen/Border color (red border)
             ldx #8              ; Device number
             ldy #0              ; Command (none)
             jsr SETLFS          ; ,,            
-            lda #4              ; Filename is the current four-digit year,
-            ldx #<SCREEN+40     ;   which can be scraped from the screen
-            ldy #>SCREEN+40     ;   ,,
+            lda #6              ; Filename is the current four-digit year,
+            ldx #<SAVE_NAME     ;   number sign, and extension
+            ldy #>SAVE_NAME     ;   ,,
             jsr SETNAM          ;   ,,
             ldx #<SCREEN        ; Low byte start
             stx $c1             ; ,,
@@ -1972,12 +1989,14 @@ DiskSave:   lda #250            ; Screen/Border color (red border)
             iny                 ; 512 bytes
             iny                 ; ,,
             jsr SAVE            ; SAVE
-            bcc ExitDisk        ; Exit Disk Menu if save OK
-            ; Fall through to error recovery
+            bcs ErrRecover      ; Recover from error, if carry set
+            jmp ExitDisk        ; If SAVE was okay, exit disk menu
 
 ; Recover from Disk Error
 ; By restoring the disk menu screen           
-ErrRecover: lda #$f0            ; Back to default character set
+ErrRecover: lda #254            ; Set the screen color back; it may have
+            sta SCRCOL          ;   been changed by the failed operation
+            lda #$f0            ; Back to default character set
             sta VICCR5          ; ,,
             jsr SwapOut         ; Swap out the existing city screen
             ; Fall through to DiskError
@@ -2103,6 +2122,14 @@ DiskLoad:   lda #253            ; Screen/Border color (green border)
             cmp #0              ; Have we reached the end of the name?
             bne loop            ; ,,
             dey                 ; Went one too far, so back off
+            dey                 ; Decrement Y to refer to the final character
+            lda (TMP_PTR),y     ; If the last character of the filename is
+            cmp #"0"            ;   a numeral, then use that numeral as the
+            bcc load_setn       ;   save extension, as a courtesy to the
+            cmp #"9"+1          ;   player, who may wish to keep the same
+            bcs load_setn       ;   extension for other saved games
+            sta SAVE_EXT        ;   ,,
+load_setn:  iny                 ; Increment Y to be the length
             tya                 ; A is the filename
             ldx TMP_PTR         ; X is low byte of name pointer
             ldy TMP_PTR+1       ; Y is high byte of name pointer
@@ -2296,15 +2323,16 @@ Header:     .asc $93,$1f,"PQRSTU!!!!!!!!VWXYZ[",$5c,"]"
 
 ; Disk Utility Text
 ; Menu
-Disk1:      .asc $93,$0d,$1f," DISKETTE MENU",$0d,$0d,$0d,
-            .asc " ",$12,"S",$92,"   : SAVE ",$22,"    ",$22,$0d,$0d,
+Disk1:      .asc $93,$0d,$1f,"    DISKETTE  MENU",$0d,$0d,$0d,
+            .asc " ",$12,"0",$92,"-",$12,"9",$92," : SET FILENAME",$0d,$0d,
+            .asc " ",$12,"S",$92,"   : SAVE ",$22,$90,"    # ",$1f,$22,$0d,$0d,
             .asc " ",$12,"L",$92,"   : LOAD",$0d,$0d,
-            .asc " ",$12,"STOP",$92,": CANCEL",0
+            .asc " ",$12,"STOP",$92,": CANCEL",$0d,0
 ; Error
 Disk2:      .asc $13,$0d,$1c,"  *** DISK ERROR *** ",$1f,$0d,$0d,$0d,$0d,$0d,
-            .asc $0d,$0d,00
+            .asc $0d,$0d,$0d,$0d,$0d,0
 ; Getting Directory
-Disk3:      .asc $0d,$0d,$0d," GETTING DIRECTORY...",0
+Disk3:      .asc $0d,$0d,$1e," GETTING DIRECTORY...",$1f,0
 ; Load Screen
 Disk4:      .asc $93,$0d,$1f," LOAD CITY OR MODPACK",$0d,$0d,$0d,
             .asc " JOYSTICK: SELECT",$0d,$0d,
