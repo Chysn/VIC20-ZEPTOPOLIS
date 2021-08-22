@@ -30,6 +30,7 @@ MENU_ITEMS  = 9                 ; Number of actions in menu
 EMP_THRESH  = 7                 ; Employment threshhold
 HEIGHT      = 19                ; Maximum Y position
 DEC_PAD     = 0                 ; Left padding character (0 for no padding)
+RULE_SIZE   = RuleEnd - Ruleset ; Size (in bytes) of Modpacks
 
 ; Color Constants
 ; So I don't need to remember them anymore
@@ -94,6 +95,7 @@ FIRE        = 4
 S_KEY       = 5                 ; "S" has been pressed (Save)
 L_KEY       = 6                 ; "L" has been pressed (Load)
 F1_KEY      = 7                 ; "F1" has been pressed (Disk)
+F3_KEY      = 8                 ; "F3" has been pressed (Ruleset)
 
 ; Game Memory
 UNDER       = $00               ; Character under pointer
@@ -262,8 +264,11 @@ ch_load:    cpx #L_KEY          ; If "L" was pressed, load a city
             bne ch_disk         ; ,,
             jmp TapeLoad        ; ,,
 ch_disk:    cpx #F1_KEY         ; If "F1" was pressed, go to Disk menu
-            bne ch_action       ; ,,
+            bne ch_ruleset       ; ,,
             jmp DiskMenu        ; ,,
+ch_ruleset: cpx #F3_KEY         ; If "F3" was pressed, go to Ruleset menu
+            bne ch_action       ; ,,
+            jmp RuleMenu        ; ,,
 ch_action:  cpx #FIRE           ; Has fire been pressed?
             beq Action          ; If so, go to Action mode
             txa                 ; Move joystick direction to A and
@@ -1380,9 +1385,12 @@ ch_S:       lda KEYDOWN         ; Key current keypress
 ch_L:       cmp #21             ; "L" for Load
             bne ch_F1           ; ,,
             ldx #L_KEY+1        ; ,, (will be 6 after DEX below)
-ch_F1:      cmp #39             ; "F1" for Disk
-            bne control_r       ; ,,
+ch_F1:      cmp #39             ; "F1" for Disk Menu
+            bne ch_F3           ; ,,
             ldx #F1_KEY+1       ; ,,
+ch_F3:      cmp #47             ; "F3" for Ruleset Menu
+            bne control_r       ; ,,
+            ldx #F3_KEY+1       ; ,,
 control_r:  dex                 ; dex to maybe set zero flag
             rts
             
@@ -1584,6 +1592,30 @@ Hex2Deci:   lda #$00            ; Initialize return value
             bne loop            ;   ,,
             rts            
 
+; Swap Out
+; For start of menu screen
+SwapOut:    lda UNDER           ; Clear the Cursor out of the way
+            jsr Place           ; ,,
+            ldy #0
+-loop:      lda SCREEN,y
+            sta SWAP_BOARD,y
+            lda SCREEN+$0100,y
+            sta SWAP_BOARD+$0100,y
+            dey
+            bne loop
+            rts
+            
+; Swap In
+; For return to game
+SwapIn:     ldy #0
+-loop:      lda SWAP_BOARD,y
+            sta SCREEN,y
+            lda SWAP_BOARD+$0100,y
+            sta SCREEN+$0100,y
+            dey
+            bne loop
+            rts
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; SETUP ROUTINES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1616,7 +1648,7 @@ Welcome:    jsr $fd8d           ; Test RAM, initialize VIC chip
             lda #<Intro         ; Show Splash Screen
             ldy #>Intro         ; ,,
             jsr PrintStr        ; ,,
-            ldx #RulesetEnd-Ruleset
+            ldx #RULE_SIZE
 -loop:      lda Ruleset,x
             sta MODPACK,x
             dex
@@ -1875,32 +1907,8 @@ ClrPrompt:  lda #$20            ; Clear the tape prompt icons
             rts                 ; Return from caller with Z=0
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; DISK SAVE/LOAD
+; DISK SAVE/LOAD (F1)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; Swap Out
-; For start of Save screen
-SwapOut:    lda UNDER           ; Clear the Cursor out of the way
-            jsr Place           ; ,,
-            ldy #0
--loop:      lda SCREEN,y
-            sta SWAP_BOARD,y
-            lda SCREEN+$0100,y
-            sta SWAP_BOARD+$0100,y
-            dey
-            bne loop
-            rts
-            
-; Swap In
-; For return to game
-SwapIn:     ldy #0
--loop:      lda SWAP_BOARD,y
-            sta SCREEN,y
-            lda SWAP_BOARD+$0100,y
-            sta SCREEN+$0100,y
-            dey
-            bne loop
-            rts
-
 ; Diskette Menu                        
 DiskMenu:   jsr CLALL
             sec                 ; Activate minimal ISR for disk menu
@@ -1928,7 +1936,7 @@ MenuInput:  ldy #3              ; Put the year after the word Save
             beq wait            ; ,,
             cmp #$18            ; STOP pressed, return to Main
             bne ch_disk_l       ; ,,
-ExitDisk:   jsr SwapIn          ; Swap city data back to screen
+ExitMenu:   jsr SwapIn          ; Swap city data back to screen
 LoadDone:   lda #$ff            ; Set character set back to city
             sta VICCR5          ; ,,
             ldy #66             ; Set the header color back
@@ -1990,7 +1998,7 @@ DiskSave:   lda #250            ; Screen/Border color (red border)
             iny                 ; ,,
             jsr SAVE            ; SAVE
             bcs ErrRecover      ; Recover from error, if carry set
-            jmp ExitDisk        ; If SAVE was okay, exit disk menu
+            jmp ExitMenu        ; If SAVE was okay, exit disk menu
 
 ; Recover from Disk Error
 ; By restoring the disk menu screen           
@@ -2088,7 +2096,7 @@ ShowDir:    jsr ShowFiles       ; Show filenames from directory index
 -wait:      lda KEYDOWN         ; Wait for control. Is STOP pressed?
             cmp #$18            ; ,,
             bne ch_load_f       ; ,,
-            jmp ExitDisk        ; If so, exit disk menu
+            jmp ExitMenu        ; If so, exit disk menu
 ch_load_f:  cmp #$0f            ; Is RETURN pressed?
             bne ch_sel          ; ,,
             jmp DiskLoad        ; If so, load file
@@ -2143,7 +2151,8 @@ load_setn:  iny                 ; Increment Y to be the length
             lda $af             ; Is this a city (ending at $2000)?
             cmp #$20            ; ,,
             beq city            ; If not, exit by swapping city back in
-            jmp ExitDisk        ;   ,,
+            jsr MusicInit       ;   ,, (Restart music if Modpack was loaded)
+            jmp ExitMenu        ;   ,,
 city:       ldx #0              ; Preserve whatever came from the load
             lda (PTR,x)         ;   under the Cursor
             sta UNDER           ;   ,,
@@ -2248,6 +2257,58 @@ IncFnPtr:   inc TMP_PTR
             bne incfn_r
             inc TMP_PTR+1
 incfn_r:    rts
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; RULESET SELECTION (F3)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+RuleMenu:   jsr CLALL
+            sec                 ; Activate minimal ISR for disk menu
+            ror MISR_FL         ; ,,
+            ldx #0
+            lda #$f0            ; Set default character set
+            sta VICCR5          ; ,,
+            jsr MusicStop          
+            jsr SwapOut         ; Swap out the existing city screen
+            lda #<RuleInst      ; Show Disk Menu
+            ldy #>RuleInst      ; ,,
+            jsr PrintStr        ; ,,
+-wait:      lda KEYDOWN         ; Wait for a key to be pressed
+            cmp #$40            ; ,,
+            beq wait            ; ,,
+            cmp #$18            ; If stop is pressed, exit this menu
+            bne ch_level        ; ,,
+            jmp ExitMenu        ; ,,
+ch_level:   jsr $ffe4           ; Check pressed level number
+            beq wait            ; If no keypress, go back to wait
+            cmp #"1"            ; Make sure the key is between 1 and 4
+            bcc wait            ; ,,
+            cmp #"4"+1          ; ,,
+            bcs wait            ; ,,
+            sec                 ; Convert pressed key to data index
+            sbc #"1"            ; ,,
+            tay                 ; Y is the data index
+            lda #<Ruleset       ; TMP_PTR will be the pointer to the ruleset
+            sta TMP_PTR         ;   data
+            lda #>Ruleset       ;   ,,
+            sta TMP_PTR+1       ;   ,,
+            cpy #0              ; If index is 0, we already have TMP_PTR
+            beq rule_copy       ; ,,
+-loop:      lda #RULE_SIZE      ; Add the size of the ruleset Y times
+            clc                 ; ,,
+            adc TMP_PTR         ; ,,
+            sta TMP_PTR         ; ,,
+            bcc next_rule       ; ,,
+            inc TMP_PTR+1       ; ,,
+next_rule:  dey                 ; ,,
+            bne loop            ; ,,
+rule_copy:  ldy #RULE_SIZE      ; Y is the index of the last byte in the ruleset
+            dey                 ;   RULE_SIZE - 1
+-loop:      lda (TMP_PTR),y     ; Install rule in ROM to working Modpack in RAM
+            sta MODPACK,y       ; ,,
+            dey                 ; All the way down to byte 0
+            bpl loop            ; ,,
+            jsr MusicInit       ; Start new soundtrack
+            jmp ExitMenu
                                                                                 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; OUTPUT ROUTINES
@@ -2347,6 +2408,18 @@ Disk5:      .asc $13,$0d,$1c,"   *** NO FILES *** ",$1f,0
 ; Loading...
 Disk6:      .asc $13,$0d,$1e,"  *** LOADING... *** ",$1f,0
 
+; Rule Menu instructions
+RuleInst:   .asc $93,$0d,$1f,"     RULESET MENU",$0d,$0d,$0d,
+            .asc " ",$12,"1",$92,"   : NORMAL",$0d,$0d,
+            .asc " ",$12,"2",$92,"   : EASY ",$0d,$0d,
+            .asc " ",$12,"3",$92,"   : HARD",$0d,$0d,
+            .asc " ",$12,"4",$92,"   : DISASTERS!",$0d,$0d,
+            .asc " ",$12,"STOP",$92,": CANCEL",$0d,$0d,$0d
+            .asc "AFTER CHANGING RULESET"
+            .asc "PRESS RESTORE TO START"
+            .asc "A NEW CITY,OR CONTINUE"
+            .asc "CURRENT CITY.",0
+
 ; Budget Header
 BudgetR     .asc $13,$11,$11,$5f,";",$00
 BudgetE     .asc $21,$5e,";",$00
@@ -2395,7 +2468,7 @@ PlaceLow:   .byte $01,$0a,$64,$e8,$10
 PlaceHigh:  .byte $00,$00,$00,$03,$27
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; RULESET
+; RULESETS
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; See modpack-boilerplate.asm for more information.
 ; This data is loaded by the Welcome subroutine to $100d so that it can be
@@ -2460,7 +2533,72 @@ _TornPath:  .byte 6
 ; The default is 25 + (0-7) years, or between 25-32 years
 _PandFreq:  .byte 25
 
-RulesetEnd
+RuleEnd                         ; For setting RULE_SIZE contant
+
+; Easy Ruleset
+EasyRules:
+            .byte 147,159,163,175,183,191,195,201         
+            .byte $02,$20,$00,$3c
+            .byte 10
+            .word 1999
+            .word 700
+            .byte 6
+            .byte 5
+            .byte 10
+            .byte 3,        7,      5,         7,     1
+            .byte 0,         0,      2,         0,      0,    2,     0
+            .byte 0,         2,      0,         2,      1,    0,     2
+            .byte $ff,       0,      1,         0,      1,    1,     2
+            .byte $ff,       1,      $ff,       $ff,    1,    $fe,   $ff
+            .byte %00000010
+            .byte 50
+            .byte 5
+            .byte %00001000
+            .byte 4
+            .byte 100
+
+; Hard Ruleset
+HardRules:
+            .byte 147,159,163,175,183,191,195,201         
+            .byte $05,$41,$85,$00
+            .byte 7
+            .word 1990
+            .word 200
+            .byte 2
+            .byte 5
+            .byte 10
+            .byte 6,        17,     12,        12,     2
+            .byte 0,         0,      2,         0,      0,    2,     0
+            .byte 0,         2,      0,         2,      1,    0,     2
+            .byte $ff,       0,      1,         0,      1,    1,     2
+            .byte $ff,       1,      $ff,       $ff,    1,    $fe,   $ff
+            .byte %00010000
+            .byte 12
+            .byte 20
+            .byte %00100000
+            .byte 7
+            .byte 18
+            
+; Disaster Ruleset
+            .byte 147,159,163,175,183,191,195,201         
+            .byte $55,$aa,$55,$ab
+            .byte 9
+            .word 2012
+            .word 600
+            .byte 4
+            .byte 5
+            .byte 10
+            .byte 5,        15,     10,        10,     1
+            .byte 0,         0,      2,         0,      0,    2,     0
+            .byte 0,         2,      0,         2,      1,    0,     2
+            .byte $ff,       0,      1,         0,      1,    1,     2
+            .byte $ff,       1,      $ff,       $ff,    1,    $fe,   $ff
+            .byte %01000000
+            .byte 5
+            .byte 20
+            .byte %01000000
+            .byte 8
+            .byte 12            
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; CITY CHARACTER SET
