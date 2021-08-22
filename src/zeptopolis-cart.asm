@@ -30,7 +30,7 @@ MENU_ITEMS  = 9                 ; Number of actions in menu
 EMP_THRESH  = 7                 ; Employment threshhold
 HEIGHT      = 19                ; Maximum Y position
 DEC_PAD     = 0                 ; Left padding character (0 for no padding)
-RULE_SIZE   = RuleEnd - Ruleset ; Size (in bytes) of Modpacks
+RULE_SIZE   = RuleEnd - RuleSrc ; Size (in bytes) of rulesets
 
 ; Color Constants
 ; So I don't need to remember them anymore
@@ -154,7 +154,7 @@ MUSIC_TIMER = $11               ; Music timer
 MUSIC_MOVER = $12               ; Change counter
 
 ; RAM storage
-MODPACK     = $100d             ; Modpack (59 bytes)
+RULESET     = $100d             ; Working Ruleset (59 bytes)
 SAVE_NAME   = $1080             ; Disk save name for SETNAM (6 bytes)
 SWAP_BOARD  = $1100             ; Swapped-out game board (512 bytes)
 DIRECTORY   = $1300             ; Disk directory, with names separated
@@ -1649,8 +1649,8 @@ Welcome:    jsr $fd8d           ; Test RAM, initialize VIC chip
             ldy #>Intro         ; ,,
             jsr PrintStr        ; ,,
             ldx #RULE_SIZE
--loop:      lda Ruleset,x
-            sta MODPACK,x
+-loop:      lda RuleSrc,x
+            sta RULESET,x
             dex
             bpl loop
 -wait:      jsr Controls
@@ -2151,7 +2151,7 @@ load_setn:  iny                 ; Increment Y to be the length
             lda $af             ; Is this a city (ending at $2000)?
             cmp #$20            ; ,,
             beq city            ; If not, exit by swapping city back in
-            jsr MusicInit       ;   ,, (Restart music if Modpack was loaded)
+            jsr MusicInit       ;   ,, (Restart music if ruleset was loaded)
             jmp ExitMenu        ;   ,,
 city:       ldx #0              ; Preserve whatever came from the load
             lda (PTR,x)         ;   under the Cursor
@@ -2287,9 +2287,9 @@ ch_level:   jsr $ffe4           ; Check pressed level number
             sec                 ; Convert pressed key to data index
             sbc #"1"            ; ,,
             tay                 ; Y is the data index
-            lda #<Ruleset       ; TMP_PTR will be the pointer to the ruleset
-            sta TMP_PTR         ;   data
-            lda #>Ruleset       ;   ,,
+            lda #<RuleSrc       ; TMP_PTR will be the pointer to the ruleset
+            sta TMP_PTR         ;   source data
+            lda #>RuleSrc       ;   ,,
             sta TMP_PTR+1       ;   ,,
             cpy #0              ; If index is 0, we already have TMP_PTR
             beq rule_copy       ; ,,
@@ -2303,8 +2303,8 @@ next_rule:  dey                 ; ,,
             bne loop            ; ,,
 rule_copy:  ldy #RULE_SIZE      ; Y is the index of the last byte in the ruleset
             dey                 ;   RULE_SIZE - 1
--loop:      lda (TMP_PTR),y     ; Install rule in ROM to working Modpack in RAM
-            sta MODPACK,y       ; ,,
+-loop:      lda (TMP_PTR),y     ; Install rule in ROM to working ruleset in RAM
+            sta RULESET,y       ; ,,
             dey                 ; All the way down to byte 0
             bpl loop            ; ,,
             jsr MusicInit       ; Start new soundtrack
@@ -2395,7 +2395,7 @@ Disk2:      .asc $13,$0d,$1c,"  *** DISK ERROR *** ",$1f,$0d,$0d,$0d,$0d,$0d,
 ; Getting Directory
 Disk3:      .asc $0d,$0d,$1e," GETTING DIRECTORY...",$1f,0
 ; Load Screen
-Disk4:      .asc $93,$0d,$1f," LOAD CITY OR MODPACK",$0d,$0d,$0d,
+Disk4:      .asc $93,$0d,$1f," LOAD CITY OR RULESET",$0d,$0d,$0d,
             .asc " JOYSTICK: SELECT",$0d,$0d,
             .asc " ",$12,"RETURN",$92,"  : LOAD",$0d,$0d,
             .asc " ",$12,"STOP",$92,"    : CANCEL",$0d,
@@ -2468,12 +2468,12 @@ PlaceLow:   .byte $01,$0a,$64,$e8,$10
 PlaceHigh:  .byte $00,$00,$00,$03,$27
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; RULESETS
+; ROM RULESETS
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; See modpack-boilerplate.asm for more information.
+; See ruleset-boilerplate.asm for more information.
 ; This data is loaded by the Welcome subroutine to $100d so that it can be
-; overwritten by a Modpack load
-Ruleset
+; overwritten by a ruleset load
+RuleSrc
 
 ; Musical Mode
 ; Dorian         
