@@ -1310,7 +1310,7 @@ AddPop:     clc
             adc POP
             sta POP
             bcc addpop_r
-            inc POP
+            inc POP+1
 addpop_r:   rts      
 
 ; Set Screen Color
