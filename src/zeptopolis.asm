@@ -243,6 +243,7 @@ VIA1PA2     = $911f             ; VIA 1 DRA, no handshake
 CASECT      = $0291             ; Disable Commodore case
 VIATIME     = $9114             ; VIA 1 Timer 1 LSB
 POWERSOF2   = $8270             ; Bit value at index (character ROM)
+KEYCVTRS    = $028d             ; Keyboard codes
 KEYDOWN     = $c5               ; Key held down
 MSGFLG      = $9d               ; KERNAL message mode flag,
 
@@ -388,7 +389,7 @@ ch_dup:     clc                 ; If the built character is the same as the
             beq buy             ; ,,
             lda UpdateCost      ; Use the update cost instead
 buy:        jsr Spend           ; Try to do the spend
-            bcs cancel          ; ,,
+            bcs cancel          ; If not enough money, do nothing instead
             jsr DrawTreas       ; Update Treasury amount
             lda BUILD_IX
             cmp #IDX_ROAD       ; If the player is building a road...
@@ -401,12 +402,11 @@ reg_item:   clc                 ; Show the item at the cursor
             jsr Roads           ; Rebuild roads to account for potential
             ldx #0              ;   changes to the infrastructure
             lda (PTR,x)         ; Get the new character under the pointer
-            sta UNDER           ;   and set that as UNDER. Don't show the
-            jmp Main            ;   cursor until moved.
-cancel:     lda UNDER
-            cmp #$20
-            bne to_main
-            jsr DrawCursor
+            sta UNDER           ;   and set that as UNDER.
+cancel:     lda UNDER           ; Draw the cursor if there's a space under it
+            cmp #$20            ; ,,
+            bne to_main         ; ,,
+            jsr DrawCursor      ; ,,
 to_main:    jmp Main
             
 ; Interrupt Service Routine 
@@ -815,6 +815,9 @@ next_r:     pla                 ; Restore the original population
             sta POP+1           ; ,,
             pla                 ; ,,
             sta POP             ; ,,
+            lda KEYCVTRS        ; If the Shift key is held down at the end of
+            and #$01            ;   the end of turn processing, immediately go
+            bne NextTurn        ;   to the next turn
             jmp Main  
             
 ; Draw Detail Bar
@@ -899,9 +902,16 @@ yes_quake:  jsr MusicStop
             ldx #0              ; Lakes can't be destroyed by earthquakes
             lda (PTR,x)         ; ,,
             cmp #CHR_LAKE       ; ,,
-            beq next_dmg        ; ,,
-            lda #CHR_BURN       ; Place damage on screen
-            jsr Place           ; ,,
+            bne not_lake        ; ,,
+            jsr Rand3           ; Flooding - If an Earthquake hits a Lake, the
+            jsr MoveCoor        ;   Lake will flood, creating a new adjacent
+            jsr CheckBound      ;   Lake
+            jsr Coor2Ptr        ;   ,,
+            bcs next_dmg        ;   ,,
+            lda #CHR_LAKE       ;   ,,
+            .byte $3c           ;   ,, (Skip word)
+not_lake:   lda #CHR_BURN       ; Place damage on screen
+place_dmg:  jsr Place           ; ,,
             lda #30             ; Delay during the shaking
             jsr Delay           ; ,,
 next_dmg:   dey                 ; Go back for more destruction!
@@ -911,9 +921,7 @@ next_dmg:   dey                 ; Go back for more destruction!
             lda ORIG_HORIZ      ; Restore the original horiz position
             sta HORIZ           ; ,,
             cli
-            lda #0              ; Turn off the earthquake sound
-            sta NOISE           ; ,,
-            sta VOICEL          ; ,,
+            jsr MusicStop       ; Turn off quake sounds
             jsr NextQuake       ; Set the date of the next disaster  
             jsr MusicPlay       ; Re-initialize the music after an earthquake
             jmp ResetCoor       ; Reset the coordinates  
@@ -953,8 +961,7 @@ yes_tor:    jsr MusicStop       ; ,,
             lda (PTR,x)         ;   Tornado dissipates over the lake
             cmp #CHR_LAKE       ;   ,,
             beq tornado_r       ;   ,,
-            lda #CHR_BURN       ; Place the damage on the screen
-            jsr Place           ; ,,
+            jsr Destroy         ; Destroy the landscape
             inc NOISE           ; Increase pitch of Tornado
             ldx #5              ; Flash some lightning
 flashes:    lda VICCR4          ; ,,
@@ -1026,39 +1033,38 @@ Upkeep:     lda COOR_X          ; Save cursor coordinates
 -loop:      sta PROGRESS,x      ;   need to be reset to 0 at the beginning of
             dex                 ;   the Upkeep
             bpl loop            ;   ,,
-rand_x:     jsr Rand31          ; Get random location 0-31
-            cmp #22             ; If it's not a good X coordinate range,
-            bcs rand_x          ;   get another one
-            sta COOR_X          ;   ,,
+            jsr RandCoor        ; Get random COOR_X
+            lda #0              ; And put COOR_Y at the top of the screen
+            sta COOR_Y          ; ,,
 -loop:      jsr Coor2Ptr        ; Get the character at the pointer
             ldx #$00            ; ,,
             lda (PTR,x)         ; ,,   
             cmp #CHR_UHOME      ; Handle UNOCCUPIED HOME
             bne ch_ubus         ; ,,
-            jmp SellHome
+            jmp SellHome        ; ,,
 ch_ubus:    cmp #CHR_UBUS       ; Handle UNOCCUPIED_BUSINESS
-            bne ch_home
-            jmp SellBus
+            bne ch_home         ; ,,
+            jmp SellBus         ; ,,
 ch_home:    cmp #CHR_HOME       ; Handle HOME
-            bne ch_bus          ; ,,
+            bne ch_bus
             jsr CompHome        ; Compute Home
             jmp next_map
 ch_bus:     cmp #CHR_BUS        ; Handle BUSINESS
-            bne ch_maint
-            jsr CompBus
+            bne ch_maint        ; ,,
+            jsr CompBus         ; Compute Business
             jmp next_map
 ch_maint:   cmp #CHR_WIND       ; Pay maintenance for maintainable
             bcc next_map        ;   structures (Wind Farm, School,
             cmp #CHR_PARK+1     ;   Firehouse, Clinic, Park).
             bcs next_map        ;   ,,
             jsr Maint           ;   ,,
-next_map:   inc COOR_Y
-            lda COOR_Y
-            cmp #HEIGHT
-            bne loop
-            lda #0
-            sta COOR_Y
-            inc COOR_X
+next_map:   inc COOR_Y          ; Go to the next row
+            lda COOR_Y          ; Have we reached the bottom of the screen?
+            cmp #HEIGHT         ; ,,
+            bne loop            ; If not, do the next row
+            lda #0              ; If so, go back to the top of the screen and...
+            sta COOR_Y          ;   ,,
+            inc COOR_X          ;   ...advance to the next column
             inc PROGRESS        ; Advance Progress Bar and draw it
             ldy PROGRESS        ; ,,
             lda #CHR_PROG       ; ,, Progress bar character
@@ -1085,8 +1091,7 @@ Maint:      sec                 ; Convert character to index
             bcc maint_r         ; If there's not enough, there's a 1 in 8
             jsr Rand7           ;   chance that the stucture will burn
             bne maint_r         ;   down
-            lda #CHR_BURN       ;   ,,
-            jmp Place           ;   ,,
+            jmp Destroy
 maint_r:    rts            
             
 
@@ -1222,7 +1227,7 @@ CatchFire:  lda #BIT_FIRE       ; Is there a nearby Firehouse?
             lda FireRisk        ; Get the fire risk parameter (default is
             jsr PRand           ;   1 in 32)
             bne no_risk         ;   ,,
-            lda #CHR_BURN       ; Otherwise, burn it down!
+Destroy:    lda #CHR_BURN       ; Otherwise, burn it down!
             jsr Place           ; ,,
             sec                 ; Set Carry to indicate the property was
             rts                 ;   destroyed
@@ -1272,37 +1277,6 @@ assess_nx:  dey                 ;   ,,
             lda #0              ; ,,
             sta VALUE           ; ,,
 assess_r:   rts
-
-; Fires Out
-; Converts MOST fires (75%) to spaces            
-FiresOut:   lda COOR_X
-            pha
-            lda COOR_Y
-            pha
-            lda #0
-            sta COOR_X
-            sta COOR_Y
--loop:      jsr Coor2Ptr
-            ldx #0
-            lda (PTR,x)
-            cmp #CHR_BURN
-            bne no_fire
-            jsr Rand3
-            beq no_fire
-            lda #$20
-            sta (PTR,x)
-no_fire:    inc COOR_X
-            lda COOR_X
-            cmp #22
-            bne loop
-            inc COOR_Y
-            lda COOR_Y
-            cmp #HEIGHT
-            beq f_out_r
-            lda #0
-            sta COOR_X
-            beq loop
-f_out_r:    jmp ResetCoor            
             
 ; Add Population
 ; In A
@@ -1321,9 +1295,41 @@ SetScrCol:  lda #254            ; Return screen color to normal
             inc SCRCOL          ;   so just increase by one. Convenient!
 no_pand:    rts
 
+; Fires Out
+; Converts MOST fires (75%) to spaces  
+; Handles screen between index 66 (after header, Overview and Detail) and
+; 483 (last non-data-storage screen space)          
+FiresOut:   ldx #209            ; (End (484) - Start (66)) / 2
+-loop:      lda SCREEN+65,x     ; X goes 1-209, so SCREEN+65,x covers 66-274
+            cmp #CHR_BURN       ;   Is there a fire here?
+            bne bott_scr        ;   If not, check the bottom half
+            jsr Rand3           ;   If so, roll D4 and preserve fire on 0
+            beq bott_scr        ;   ,,
+            lda #$20            ;   Put out this fire 75% of the time
+            sta SCREEN+65,x     ;   ,,
+bott_scr:   lda SCREEN+274,x    ; X goes 1-209, so SCREEN+285,x covers 275-483
+            cmp #CHR_BURN       ;   Is there a fire here?
+            bne no_fire         ;   If not, loop
+            jsr Rand3           ;   If so, roll D4 and preserve fire on 0
+            beq no_fire         ;   ,,
+            lda #$20            ;   Put out this fire 75% of the time
+            sta SCREEN+274,x    ;   ,,
+no_fire:    dex
+            bne loop
+            rts
+ 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; SUBROUTINES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Reset Coordinates
+; Coordinates are often stored on the stack. This resets them.
+ResetCoor:  pla
+            sta COOR_Y
+            pla
+            sta COOR_X
+            jsr Coor2Ptr
+            rts 
+
 ; Delay A Jiffies
 ; Actually, between (A - 1) and A jiffies, but that shouldn't matter for the
 ; purposes of this routine
@@ -1433,15 +1439,6 @@ no_y:       lda COOR_X          ; Get x coordinate
             bcc t2p_r           ; ,,
             inc PTR+1           ; ,,
 t2p_r       rts 
-
-; Reset Coordinates
-; Coordinates are often stored on the stack. This resets them.
-ResetCoor:  pla
-            sta COOR_Y
-            pla
-            sta COOR_X
-            jsr Coor2Ptr
-            rts  
 
 ; Check Boundary
 ; of COOR_X and COOR_Y
